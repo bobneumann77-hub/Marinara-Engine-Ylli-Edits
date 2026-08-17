@@ -2671,6 +2671,8 @@ export async function chatsRoutes(app: FastifyInstance) {
                 ? (chatMeta.groupScenarioText as string).trim()
                 : null,
             lastInput: [...mappedMessages].reverse().find((message) => message.role === "user")?.content,
+            lastMessage: mappedMessages.at(-1)?.content,
+            lastSender: mappedMessages.at(-1)?.role,
             chatId: req.params.id,
             lastGenerationType: "preview",
             idleDuration: promptIdleDuration,

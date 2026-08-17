@@ -31,6 +31,10 @@ export interface MacroContext {
   /** Last user input message (for {{input}}) */
   lastInput?: string;
   /** Chat ID (for {{chatId}}) */
+  /** Last message content regardless of role (for {{last_message}}) */
+  lastMessage?: string;
+  /** Role of the last message sender: 'user', 'assistant', 'system' (for {{last_sender}}) */
+  lastSender?: string;
   chatId?: string;
   /** Model name (for {{model}}) */
   model?: string;
@@ -433,6 +437,8 @@ export const SUPPORTED_MACROS: readonly SupportedMacroDefinition[] = [
     description: "Place lorebook injections here and skip their auto insertion (Conversation mode)",
   },
   { category: "Context", syntax: "{{input}}", description: "Most recent user message" },
+  { category: "Context", syntax: "{{last_message}}", description: "Most recent message content regardless of role" },
+  { category: "Context", syntax: "{{last_sender}}", description: "Role of the last message sender (user/assistant/system)" },
   { category: "Context", syntax: "{{model}}", description: "Current model name" },
   { category: "Context", syntax: "{{chatId}}", description: "Current chat ID" },
   { category: "Context", syntax: "{{lastGenerationType}}", description: "Current generation type label" },
@@ -543,6 +549,8 @@ function macroContextForCharacterProfile(profile: CharacterMacroProfile, base?: 
     variables: base?.variables ?? {},
     localVariables: base?.localVariables,
     lastInput: base?.lastInput,
+    lastMessage: base?.lastMessage,
+    lastSender: base?.lastSender,
     chatId: base?.chatId,
     model: base?.model,
     lastGenerationType: base?.lastGenerationType,
@@ -954,6 +962,10 @@ function resolveConditionalOperand(raw: string, ctx: MacroContext, options: Reso
       return resolveGroupCharacters(ctx);
     case "input":
       return ctx.lastInput ?? "";
+    case "last_message":
+      return ctx.lastMessage ?? "";
+    case "last_sender":
+      return ctx.lastSender ?? "";  
     case "model":
       return ctx.model ?? "";
     case "chatid":
@@ -2013,6 +2025,8 @@ function formatMacroDateTime(now: Date, requestedTimeZone?: string): MacroDateTi
  *  - {{incvar::name}} — increment numeric variable by 1
  *  - {{decvar::name}} — decrement numeric variable by 1
  *  - {{input}} — last user message
+ *  - {{last_message}} — most recent message content regardless of role
+ *  - {{last_sender}} — role of the last message sender (user/assistant/system)
  *  - {{model}} — current model name
  *  - {{chatId}} — current chat ID
  *  - {{lastGenerationType}} — current generation type label

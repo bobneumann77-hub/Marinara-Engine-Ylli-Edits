@@ -40,6 +40,8 @@ export interface BuildPromptMacroContextInput {
   localVariables?: Record<string, string>;
   groupScenarioOverrideText?: string | null;
   lastInput?: string;
+  lastMessage?: string;
+  lastSender?: string;
   chatId?: string;
   model?: string;
   lastGenerationType?: string;
@@ -665,6 +667,8 @@ export async function buildPromptMacroContext(input: BuildPromptMacroContextInpu
     variables,
     localVariables: input.localVariables,
     lastInput: input.lastInput,
+    lastMessage: input.lastSender,
+    lastSender: input.lastMessage,
     chatId: input.chatId,
     model: input.model,
     lastGenerationType: input.lastGenerationType,

@@ -147,6 +147,8 @@ export function buildMessageMacroContext({
   userName,
   variables = {},
   lastInput,
+  lastMessage,
+  lastSender,
 }: {
   persona?: MacroPersonaData | null;
   primaryCharacter?: MacroCharacterData | null;
@@ -154,6 +156,8 @@ export function buildMessageMacroContext({
   userName?: string;
   variables?: Record<string, string>;
   lastInput?: string;
+  lastMessage?: string;
+  lastSender?: string;
 }): MacroContext {
   const fallbackCharacter = primaryCharacter ?? characters[0] ?? null;
 
@@ -163,6 +167,8 @@ export function buildMessageMacroContext({
     characters: characters.map((character) => character.name).filter((name) => name.trim().length > 0),
     variables,
     lastInput,
+    lastMessage,
+    lastSender,
     characterFields: fallbackCharacter
       ? {
           description: fallbackCharacter.description ?? "",
@@ -240,6 +246,8 @@ export function createInputMacroResolverForChat(
   characters: Array<{ id: string; data: unknown }> | undefined,
   personas: Persona[] | undefined,
   lastInput?: string,
+  lastMessage?: string,
+  lastSender?: string,
 ) {
   const chatCharacters = selectChatCharacters(chat, characters);
   const activePersona = selectActivePersona(chat, personas);
@@ -248,5 +256,7 @@ export function createInputMacroResolverForChat(
     primaryCharacter: chatCharacters[0] ?? null,
     characters: chatCharacters,
     lastInput,
+    lastMessage,
+    lastSender,
   });
 }
