@@ -806,6 +806,11 @@ export function useUpdateChatMetadata() {
       qc.invalidateQueries({ queryKey: chatKeys.list() });
       qc.invalidateQueries({ queryKey: [...chatKeys.all, "group"] });
       qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.id) });
+      // Only hideSummarisedMessages changes message visibility server-side, so scope
+      // the message-list refetch to that field rather than every metadata update.
+      if ("hideSummarisedMessages" in vars) {
+        qc.invalidateQueries({ queryKey: chatKeys.messages(vars.id) });
+      }
     },
   });
 }
@@ -860,9 +865,9 @@ function useSummaryEntryMutation() {
       }
       qc.invalidateQueries({ queryKey: chatKeys.list() });
       qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.chatId) });
-      // Only delete changes message visibility (it unhides server-side), so scope
-      // the message-list refetch to that operation rather than every summary edit.
-      if (vars.operation === "delete") {
+      // Delete and toggle change message visibility server-side, so scope
+      // the message-list refetch to those operations rather than every summary edit.
+      if (vars.operation === "delete" || vars.operation === "toggle") {
         qc.invalidateQueries({ queryKey: chatKeys.messages(vars.chatId) });
       }
     },
