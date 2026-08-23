@@ -4072,6 +4072,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
               : null,
           memory: {},
+          lorebookEntryCounts: promptMacroContext.lorebookEntryCounts,
           writableLorebookIds: null,
           chatSummary: activeChatSummary,
           authorNotes: authorNotes || null,
