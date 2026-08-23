@@ -1294,6 +1294,9 @@ export async function chatsRoutes(app: FastifyInstance) {
     } else {
       return reply.status(400).send({ error: "Unsupported summary entry operation" });
     }
+    // Pre-fetch messages for toggle-enable so we can re-hide inside the metadata callback.
+    const toggleEnableMessages =
+      body.operation === "toggle" && body.enabled === true ? await storage.listMessages(req.params.id) : null;
 
     let reorderConflict = false;
     const updated = await storage.patchMetadata(req.params.id, async (freshMeta) => {
@@ -1332,9 +1335,41 @@ export async function chatsRoutes(app: FastifyInstance) {
         nextEntries = entries.filter((entry) => !deletedIds.has(entry.id));
       } else if (body.operation === "toggle") {
         const now = new Date().toISOString();
-        nextEntries = entries.map((entry) =>
-          entry.id === body.entryId ? { ...entry, enabled: body.enabled, updatedAt: now } : entry,
-        );
+        const toggledEntry = entries.find((entry) => entry.id === body.entryId);
+        if (body.enabled) {
+          // Re-enabling: re-hide the entry's messages if hideSummarisedMessages is active.
+          const eligibleToHide =
+            freshMeta.hideSummarisedMessages === true && toggledEntry?.messageIds?.length && toggleEnableMessages
+              ? computeSummaryHideIds({
+                  messages: toggleEnableMessages,
+                  entryMessageIds: toggledEntry.messageIds,
+                  tail: resolveRoleplaySummaryTail(freshMeta.summaryTailMessages),
+                })
+              : [];
+          const hiddenMessageIds =
+            eligibleToHide.length > 0 ? await storage.bulkSetHiddenFromAI(req.params.id, eligibleToHide, true) : [];
+          nextEntries = entries.map((entry) =>
+            entry.id === body.entryId
+              ? {
+                  ...entry,
+                  enabled: true,
+                  updatedAt: now,
+                  ...(hiddenMessageIds.length > 0 ? { hiddenMessageIds } : {}),
+                }
+              : entry,
+          );
+        } else {
+          // Disabling: unhide messages owned by this entry that no other enabled entry covers.
+          const toUnhide = getChatSummaryMessageIdsToUnhideAfterDelete(entries, new Set([body.entryId]));
+          if (toUnhide.length > 0) {
+            await storage.bulkSetHiddenFromAI(req.params.id, toUnhide, false);
+          }
+          nextEntries = entries.map((entry) => {
+            if (entry.id !== body.entryId) return entry;
+            const { hiddenMessageIds: _h, ...rest } = entry;
+            return { ...rest, enabled: false, updatedAt: now };
+          });
+        }
       } else if (body.operation === "reorder") {
         const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
         if (body.entryIds.length !== entries.length || body.entryIds.some((id) => !entriesById.has(id))) {
