@@ -695,7 +695,7 @@ export function resolveRoleplaySummaryTail(value: unknown): number {
 
 /**
  * Compute which summarized message IDs the roleplay rolling summary should hide,
- * protecting the most-recent `tail` *visible* messages so recent context stays
+ * protecting the most-recent `tail` messages so recent context stays
  * in the prompt. Pure: `messages` must be chat-ordered (ascending). Returns the
  * subset of `entryMessageIds` that is not in the protected tail.
  */
@@ -708,8 +708,7 @@ export function computeSummaryHideIds(args: {
   if (entryMessageIds.length === 0) return [];
   const { MIN } = SUMMARY_TAIL_MESSAGES;
   const clampedTail = Number.isFinite(tail) ? Math.max(MIN, Math.floor(tail)) : MIN;
-  const visible = messages.filter((message) => !isMessageHiddenFromAI(message));
-  const tailIdSet = new Set(clampedTail > 0 ? visible.slice(-clampedTail).map((message) => message.id) : []);
+  const tailIdSet = new Set(clampedTail > 0 ? messages.slice(-clampedTail).map((message) => message.id) : []);
   const entryIdSet = new Set(entryMessageIds);
   return messages
     .filter((message) => entryIdSet.has(message.id) && !tailIdSet.has(message.id))
