@@ -118,6 +118,8 @@ import { createCustomStickersStorage } from "../services/storage/custom-stickers
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
+import { createPersistentItemDossierStorage } from "../services/storage/persistent-item-dossier.storage.js";
+import { reconcileItemDossier, type DossierAgentRow } from "../services/storage/persistent-item-dossier.reconciler.js";
 import { getCustomAgentImportPolicy } from "../services/agents/custom-agent-import-policy.service.js";
 import { buildLorebookSemanticEmbeddingsById, warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
@@ -10101,6 +10103,11 @@ export async function generateRoutes(app: FastifyInstance) {
                   snapshot: snap,
                   lockState,
                 });
+                const dossierStorage = createPersistentItemDossierStorage(app.db);
+                const dossierRows = Object.values(inventoryTrackerPatch.values ?? {}).flat() as DossierAgentRow[];
+                if (dossierRows.length > 0) {
+                  await reconcileItemDossier(dossierStorage, input.chatId, dossierRows);
+                }
                 if (snap && inventoryTrackerPatch.changed) {
                   await app.db
                     .update(gameStateSnapshotsTable)

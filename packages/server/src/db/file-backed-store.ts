@@ -408,6 +408,7 @@ const BUILT_IN_FILE_BACKED_TABLES = [
   "library_folders",
   "mari_instructions",
   "mari_workspace_context",
+  "persistent_item_dossier",
 ] as const;
 
 /**

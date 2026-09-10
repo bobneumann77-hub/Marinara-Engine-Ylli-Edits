@@ -242,6 +242,11 @@ import {
   readSpotifyTrackUris,
   type SpotifyRuntimeAgent,
 } from "../../services/generation/spotify-agent-runtime.js";
+import { createPersistentItemDossierStorage } from "../../services/storage/persistent-item-dossier.storage.js";
+import {
+  reconcileItemDossier,
+  type DossierAgentRow,
+} from "../../services/storage/persistent-item-dossier.reconciler.js";
 
 type PersonaContext = {
   // Persona-store ID only. A character-backed user identity keeps this null so
@@ -3269,6 +3274,11 @@ async function applyRetryResultEffects(args: {
           snapshot: snap,
           lockState: snap ? parseGameStateRow(snap as Record<string, unknown>) : null,
         });
+        const dossierStorage = createPersistentItemDossierStorage(args.app.db);
+        const dossierRows = Object.values(inventoryTrackerPatch.values ?? {}).flat() as DossierAgentRow[];
+        if (dossierRows.length > 0) {
+          await reconcileItemDossier(dossierStorage, chatId, dossierRows);
+        }
         if (snap && inventoryTrackerPatch.changed) {
           assertRetryActive();
           await app.db
