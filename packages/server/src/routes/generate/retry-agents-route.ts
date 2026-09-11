@@ -244,8 +244,8 @@ import {
 } from "../../services/generation/spotify-agent-runtime.js";
 import { createPersistentItemDossierStorage } from "../../services/storage/persistent-item-dossier.storage.js";
 import {
+  buildDossierRowsFromInventoryTracker,
   reconcileItemDossier,
-  type DossierAgentRow,
 } from "../../services/storage/persistent-item-dossier.reconciler.js";
 
 type PersonaContext = {
@@ -3275,10 +3275,29 @@ async function applyRetryResultEffects(args: {
           lockState: snap ? parseGameStateRow(snap as Record<string, unknown>) : null,
         });
         const dossierStorage = createPersistentItemDossierStorage(args.app.db);
-        const dossierRows = Object.values(inventoryTrackerPatch.values ?? {}).flat() as DossierAgentRow[];
-        if (dossierRows.length > 0) {
-          await reconcileItemDossier(dossierStorage, chatId, dossierRows);
-        }
+        const dossierRows = buildDossierRowsFromInventoryTracker({
+          rawData: result.data as Record<string, unknown>,
+          mergedPlayerStats: inventoryTrackerPatch.playerStats,
+        });
+        const retryPersonaOwnerId = (() => {
+          const identity = args.agentContext.memory._userIdentityId;
+          if (typeof identity === "string" && identity) return identity;
+          const persona = args.agentContext.memory._personaId;
+          return typeof persona === "string" && persona ? persona : null;
+        })();
+        // `chatCharacters` carries every card attached to the chat (id + name),
+        // which is the stable half of owner resolution; `presentCharacters` is a
+        // small model's transcription and is consulted second.
+        const retryChatCharacters = (args.agentContext.chatCharacters ?? []).map((character) => ({
+          characterId: character.id,
+          name: character.name,
+        }));
+        await reconcileItemDossier(dossierStorage, chatId, dossierRows, {
+          presentCharacters: snap ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters : null,
+          chatCharacters: retryChatCharacters,
+          personaId: retryPersonaOwnerId,
+          personaName: args.agentContext.persona?.name ?? null,
+        });
         if (snap && inventoryTrackerPatch.changed) {
           assertRetryActive();
           await app.db

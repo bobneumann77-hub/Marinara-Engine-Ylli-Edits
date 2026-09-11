@@ -119,7 +119,10 @@ import { createCharacterGalleryStorage } from "../services/storage/character-gal
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
 import { createPersistentItemDossierStorage } from "../services/storage/persistent-item-dossier.storage.js";
-import { reconcileItemDossier, type DossierAgentRow } from "../services/storage/persistent-item-dossier.reconciler.js";
+import {
+  buildDossierRowsFromInventoryTracker,
+  reconcileItemDossier,
+} from "../services/storage/persistent-item-dossier.reconciler.js";
 import { getCustomAgentImportPolicy } from "../services/agents/custom-agent-import-policy.service.js";
 import { buildLorebookSemanticEmbeddingsById, warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
@@ -10104,10 +10107,26 @@ export async function generateRoutes(app: FastifyInstance) {
                   lockState,
                 });
                 const dossierStorage = createPersistentItemDossierStorage(app.db);
-                const dossierRows = Object.values(inventoryTrackerPatch.values ?? {}).flat() as DossierAgentRow[];
-                if (dossierRows.length > 0) {
-                  await reconcileItemDossier(dossierStorage, input.chatId, dossierRows);
-                }
+                const dossierRows = buildDossierRowsFromInventoryTracker({
+                  rawData: result.data as Record<string, unknown>,
+                  mergedPlayerStats: inventoryTrackerPatch.playerStats,
+                });
+                // The chat's own cards are the stable half of owner resolution:
+                // engine-derived ids, consulted before the tracker's
+                // presentCharacters, which is a small model's transcription and
+                // may spell a card's name differently.
+                const chatCharacterIds = parseJsonField<string[]>(chat.characterIds, []);
+                const chatCharacterNameById = await resolveCharacterNameMap(chatCharacterIds, (id) => chars.getById(id));
+                const chatCharacters = [...chatCharacterNameById].map(([characterId, name]) => ({ characterId, name }));
+                await reconcileItemDossier(dossierStorage, input.chatId, dossierRows, {
+                  presentCharacters: snap ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters : null,
+                  chatCharacters,
+                  // Persona identity travels with the rows: stacks are keyed on the
+                  // persona's stable id (falling back to its name), so changing or
+                  // recreating a persona keeps its carried items attached.
+                  personaId: resolvedUserIdentity?.id ?? null,
+                  personaName: resolvedUserIdentity?.name ?? null,
+                });
                 if (snap && inventoryTrackerPatch.changed) {
                   await app.db
                     .update(gameStateSnapshotsTable)
