@@ -119,6 +119,7 @@ import { createCharacterGalleryStorage } from "../services/storage/character-gal
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
 import { createPersistentItemDossierStorage } from "../services/storage/persistent-item-dossier.storage.js";
+import { projectDossierToPlayerStats } from "../services/storage/persistent-item-dossier.projection.js";
 import {
   buildDossierRowsFromInventoryTracker,
   reconcileItemDossier,
@@ -10116,7 +10117,9 @@ export async function generateRoutes(app: FastifyInstance) {
                 // presentCharacters, which is a small model's transcription and
                 // may spell a card's name differently.
                 const chatCharacterIds = parseJsonField<string[]>(chat.characterIds, []);
-                const chatCharacterNameById = await resolveCharacterNameMap(chatCharacterIds, (id) => chars.getById(id));
+                const chatCharacterNameById = await resolveCharacterNameMap(chatCharacterIds, (id) =>
+                  chars.getById(id),
+                );
                 const chatCharacters = [...chatCharacterNameById].map(([characterId, name]) => ({ characterId, name }));
                 await reconcileItemDossier(dossierStorage, input.chatId, dossierRows, {
                   presentCharacters: snap ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters : null,
@@ -10127,11 +10130,35 @@ export async function generateRoutes(app: FastifyInstance) {
                   personaId: resolvedUserIdentity?.id ?? null,
                   personaName: resolvedUserIdentity?.name ?? null,
                 });
-                if (snap && inventoryTrackerPatch.changed) {
+                // Re-derive the persona's three tracker arrays from the dossier.
+                // The agent emits DELTAS while `buildLockedInventoryTrackerPatch`
+                // replaces a whole group whenever it is emitted, so one changed
+                // potion would otherwise show the model a one-item inventory
+                // while the dossier still holds the rest. Local `playerStats` is
+                // the merge base, so every non-tracker key survives untouched.
+                const projectedPlayerStats = projectDossierToPlayerStats({
+                  dossier: await dossierStorage.getForChat(input.chatId),
+                  playerStats: inventoryTrackerPatch.playerStats,
+                  context: {
+                    presentCharacters: snap
+                      ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters
+                      : null,
+                    chatCharacters,
+                    // Persona identity travels with the rows: stacks are keyed on
+                    // the persona's stable id (falling back to its name), so
+                    // changing or recreating a persona keeps its items attached.
+                    personaId: resolvedUserIdentity?.id ?? null,
+                    personaName: resolvedUserIdentity?.name ?? null,
+                  },
+                  // A pinned tracker array keeps whatever the user left there.
+                  isFieldLocked: (field) =>
+                    (lockState?.fieldLocks as Record<string, boolean> | null | undefined)?.[field] === true,
+                });
+                if (snap && (inventoryTrackerPatch.changed || projectedPlayerStats.changed)) {
                   await app.db
                     .update(gameStateSnapshotsTable)
                     .set({
-                      playerStats: JSON.stringify(inventoryTrackerPatch.playerStats),
+                      playerStats: JSON.stringify(projectedPlayerStats.playerStats),
                       fieldLocks: serializeMigratedTrackerLocks(lockState),
                     })
                     .where(

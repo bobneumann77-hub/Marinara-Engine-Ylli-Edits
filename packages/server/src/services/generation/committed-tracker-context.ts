@@ -134,11 +134,36 @@ function formatQuestLine(quest: any): string | null {
   return `- ${name}${objectives ? "\n" + objectives : ""}`;
 }
 
-function formatInventoryTrackerLine(item: any): string | null {
+/**
+ * Fields the committed-context renderer may append to an inventory line, in
+ * order. These are the stack fields the projection writes, minus `uuid` (engine
+ * plumbing the model has no use for) and `qty`/`name` (always rendered).
+ */
+export const INVENTORY_TRACKER_RENDER_FIELDS = ["flair", "rarity", "description", "class", "isUnique"] as const;
+export type InventoryTrackerRenderField = (typeof INVENTORY_TRACKER_RENDER_FIELDS)[number];
+
+/**
+ * On by default: `flair` is the one field written as narrative-usable text
+ * ("cracked", "wrapped in oilcloth"), so the prose model can actually use the
+ * condition. The list is a PARAMETER so a per-chat picker can widen it later
+ * without a second renderer -- that seam is the whole point of the signature.
+ */
+const DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS: readonly InventoryTrackerRenderField[] = ["flair"];
+
+function formatInventoryTrackerLine(
+  item: any,
+  fields: readonly InventoryTrackerRenderField[] = DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS,
+): string | null {
   const name = asText(item?.name);
   if (!name) return null;
   const quantity = finiteNumberText(item?.qty);
-  return `- ${name}${quantity && Number(quantity) > 1 ? ` x${quantity}` : ""}`;
+  const parts = fields.flatMap((field) => {
+    if (field === "isUnique") return item?.isUnique === true ? ["unique"] : [];
+    const text = asText(item?.[field]);
+    return text ? [text] : [];
+  });
+  const suffix = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+  return `- ${name}${suffix}${quantity && Number(quantity) > 1 ? ` x${quantity}` : ""}`;
 }
 
 export function buildCommittedTrackerContextBlock(args: {
@@ -245,7 +270,9 @@ export function buildCommittedTrackerContextBlock(args: {
         ] as const;
         const groupBlocks = inventoryGroups.flatMap(([label, rows]) => {
           if (!Array.isArray(rows) || rows.length === 0) return [];
-          const lines = rows.map(formatInventoryTrackerLine).filter(isNonEmptyLine);
+          // Arrow wrapper on purpose: `.map(formatInventoryTrackerLine)` would
+          // pass the array index into the new `fields` parameter.
+          const lines = rows.map((row) => formatInventoryTrackerLine(row)).filter(isNonEmptyLine);
           return lines.length > 0 ? [`${label}:\n${lines.join("\n")}`] : [];
         });
         if (groupBlocks.length > 0) {
