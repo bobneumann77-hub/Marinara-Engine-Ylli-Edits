@@ -140,6 +140,23 @@ function playerIdentity(context: ItemDossierReconcileContext): { name: string; i
   return { name: name || "player", id: context.personaId ?? null };
 }
 
+/**
+ * True when a stack belongs to the active persona.
+ *
+ * Shared with the projection so ownership is decided in exactly one place. An
+ * id on both sides wins, because that is what survives a persona rename; the
+ * name (and the legacy spellings) is the fallback that lets a recreated persona
+ * reclaim what it used to own, and what keeps un-migrated "player" stacks legible.
+ */
+export function isPlayerOwnedStack(stack: DossierStack, context: ItemDossierReconcileContext): boolean {
+  const player = playerIdentity(context);
+  if (player.id !== null && typeof stack.ownerId === "string" && stack.ownerId !== "") {
+    return stack.ownerId === player.id;
+  }
+  const key = canonicalName(stack.owner);
+  return key === canonicalName(player.name) || PLAYER_OWNER_ALIASES.has(key);
+}
+
 /** A row's owner after canonicalization. */
 interface ResolvedOwner {
   /** Canonical display name stored on the stack ("Fel", "Gwenpool", "world"). */
@@ -587,7 +604,7 @@ const INVENTORY_TRACKER_GROUP_TYPES: Record<string, DossierStack["type"]> = {
   world: "world",
 };
 
-const INVENTORY_TRACKER_STATS_FIELDS: Record<
+export const INVENTORY_TRACKER_STATS_FIELDS: Record<
   "currency" | "equipped" | "inventory",
   "inventoryTrackerCurrencies" | "inventoryTrackerEquipped" | "inventoryTrackerInventory"
 > = {
