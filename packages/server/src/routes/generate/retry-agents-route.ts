@@ -245,6 +245,7 @@ import {
 import { createPersistentItemDossierStorage } from "../../services/storage/persistent-item-dossier.storage.js";
 import { buildDossierRowsFromInventoryTracker } from "../../services/storage/persistent-item-dossier.reconciler.js";
 import { reconcileAndProjectItemDossier } from "../../services/storage/persistent-item-dossier.projection.js";
+import { createItemDossierSnapshotStorage } from "../../services/storage/item-dossier-snapshot.storage.js";
 
 type PersonaContext = {
   // Persona-store ID only. A character-backed user identity keeps this null so
@@ -3315,6 +3316,13 @@ async function applyRetryResultEffects(args: {
               Object.entries((retryLockState?.fieldLocks as Record<string, boolean>) ?? {}).some(
                 ([key, locked]) => locked === true && (key === prefix || key.startsWith(`${prefix}.`)),
               ),
+            // Rewind/swipe history: the dossier is snapshotted against the
+            // message being retried whenever it changed, so a later swipe or
+            // rewind restores the state at that turn instead of the newest one.
+            snapshot: {
+              storage: createItemDossierSnapshotStorage(args.app.db),
+              anchor: { messageId: retryMessageId, swipeIndex: retrySwipeIndex },
+            },
           },
         );
         if (snap && (inventoryTrackerPatch.changed || dossierProjection.changed)) {

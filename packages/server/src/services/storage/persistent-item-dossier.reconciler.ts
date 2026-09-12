@@ -538,8 +538,17 @@ export async function reconcileItemDossier(
   chatId: string,
   rows: DossierAgentRow[],
   context: ItemDossierReconcileContext = {},
+  /**
+   * Optional merge base for rewind and swipe. When provided, the reconciler
+   * merges onto this dossier instead of reading the live row, so an agent
+   * turn after a rewind continues from the state at the anchor message rather
+   * than from the newest branch. Pass `undefined` (or omit) to keep the live
+   * row as the base -- the pre-snapshot behaviour, retained so pre-upgrade
+   * chats that never accumulated snapshot history keep working.
+   */
+  base?: PersistentItemDossier | null,
 ): Promise<PersistentItemDossier> {
-  const loaded = await storage.getForChat(chatId);
+  const loaded = base !== undefined ? base : await storage.getForChat(chatId);
   const dossier: PersistentItemDossier = loaded ?? {
     schemaVersion: 2,
     definitions: [],

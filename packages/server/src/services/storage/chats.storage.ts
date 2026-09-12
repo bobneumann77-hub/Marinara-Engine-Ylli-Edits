@@ -22,6 +22,7 @@ import {
   messages,
   messageSwipes,
   gameStateSnapshots,
+  itemDossierSnapshots,
   spatialContextSnapshots,
   gameCheckpoints,
   gameEngineState,
@@ -762,6 +763,9 @@ export function createChatsStorage(db: DB) {
         .delete(gameStateSnapshots)
         .where(chatScoped(gameStateSnapshots.chatId, inArray(gameStateSnapshots.messageId, chunk)));
       await db
+        .delete(itemDossierSnapshots)
+        .where(chatScoped(itemDossierSnapshots.chatId, inArray(itemDossierSnapshots.messageId, chunk)));
+      await db
         .delete(spatialContextSnapshots)
         .where(chatScoped(spatialContextSnapshots.chatId, inArray(spatialContextSnapshots.messageId, chunk)));
       await db
@@ -944,6 +948,7 @@ export function createChatsStorage(db: DB) {
     await database.delete(agentMemory).where(eq(agentMemory.chatId, chatId));
     await database.delete(gameCheckpoints).where(eq(gameCheckpoints.chatId, chatId));
     await database.delete(gameStateSnapshots).where(eq(gameStateSnapshots.chatId, chatId));
+    await database.delete(itemDossierSnapshots).where(eq(itemDossierSnapshots.chatId, chatId));
     await database.delete(spatialContextSnapshots).where(eq(spatialContextSnapshots.chatId, chatId));
     await database.delete(gameEngineState).where(eq(gameEngineState.chatId, chatId));
     await database.delete(conversationCallMessages).where(eq(conversationCallMessages.chatId, chatId));

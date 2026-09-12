@@ -21,6 +21,7 @@ import {
   type DossierAgentRow,
   type ItemDossierReconcileContext,
 } from "./persistent-item-dossier.reconciler.js";
+import type { ItemDossierSnapshotStorage } from "./item-dossier-snapshot.storage.js";
 import type {
   DossierDefinition,
   DossierStack,
@@ -158,16 +159,62 @@ export function projectDossierToPlayerStats(args: ProjectDossierToPlayerStatsArg
  * shop or NPC-inventory agent tomorrow, the tracker panel later -- inherits the
  * projection instead of each call site having to remember to run it.
  */
+export interface ReconcileAndProjectOptions {
+  playerStats: Record<string, unknown> | null | undefined;
+  isFieldLocked?: (groupKeyPrefix: string) => boolean;
+  /**
+   * Optional rewind/swipe history hook. When present, the dossier is
+   * snapshotted against `anchor` on turns that actually changed it, so rewind
+   * and swipe restore the state at an earlier message instead of the newest
+   * branch. Pass a storage handle to enable; omit to skip entirely.
+   */
+  snapshot?: {
+    storage: ItemDossierSnapshotStorage;
+    anchor: { messageId: string; swipeIndex: number };
+  };
+  /**
+   * Optional merge base for rewind and swipe. When set, the reconciler merges
+   * onto this dossier instead of the live row, so a turn after a rewind
+   * continues from the state at the anchor message. `null` starts a fresh
+   * dossier; `undefined` (or omitted) keeps the live-row behaviour, which is
+   * correct for normal turns and for pre-upgrade chats without snapshot
+   * history.
+   */
+  base?: PersistentItemDossier | null;
+}
+
+/** Structured comparison so the snapshot write is gated on a real change. */
+function dossierChanged(before: PersistentItemDossier | null, after: PersistentItemDossier): boolean {
+  if (!before) return after.stacks.length > 0 || after.definitions.length > 0;
+  return !isDeepStrictEqual(before, after);
+}
+
 export async function reconcileAndProjectItemDossier(
   storage: PersistentItemDossierStorage,
   chatId: string,
   rows: DossierAgentRow[],
   context: ItemDossierReconcileContext,
-  projection: {
-    playerStats: Record<string, unknown> | null | undefined;
-    isFieldLocked?: (groupKeyPrefix: string) => boolean;
-  },
+  projection: ReconcileAndProjectOptions,
 ): Promise<ProjectDossierToPlayerStatsResult & { dossier: PersistentItemDossier }> {
-  const dossier = await reconcileItemDossier(storage, chatId, rows, context);
+  // Read before reconciling ONLY when the history hook is enabled, so the hook
+  // can detect a real change without a second round-trip after the write.
+  // Change-detection baseline: diff against the same state the reconcile
+  // merged onto. A rewound branch must not be compared to the live row, which
+  // belongs to a different branch and would read as a spurious change.
+  const dossierBefore =
+    projection.base !== undefined
+      ? (projection.base ?? null)
+      : projection.snapshot
+        ? await storage.getForChat(chatId)
+        : null;
+  const dossier = await reconcileItemDossier(storage, chatId, rows, context, projection.base);
+  if (projection.snapshot && dossierChanged(dossierBefore, dossier)) {
+    await projection.snapshot.storage.saveSnapshot(
+      chatId,
+      projection.snapshot.anchor.messageId,
+      projection.snapshot.anchor.swipeIndex,
+      dossier,
+    );
+  }
   return { dossier, ...projectDossierToPlayerStats({ dossier, context, ...projection }) };
 }
