@@ -32,6 +32,27 @@ import type {
 const PROJECTED_TYPES = ["currency", "equipped", "inventory"] as const;
 type ProjectedType = (typeof PROJECTED_TYPES)[number];
 
+/**
+ * Stack type -> the tracker lock group it renders into.
+ *
+ * Locks are NOT stored under the `playerStats` field name: the panel writes
+ * `player.inventoryTracker.currencies` for a whole group and
+ * `player.inventoryTracker.currencies.name:Dagger.qty` for a single row (see
+ * `roleplayInventoryTrackerGroupLockPrefix` in the shared tracker-lock helper).
+ * Asking with the field name silently never matched, which let the projection
+ * overwrite arrays the user had pinned.
+ */
+const LOCK_GROUP_BY_TYPE: Record<ProjectedType, string> = {
+  currency: "currencies",
+  equipped: "equipped",
+  inventory: "inventory",
+};
+
+/** The group lock prefix handed to the injected `isFieldLocked` predicate. */
+function inventoryTrackerGroupLockPrefix(type: ProjectedType): string {
+  return `player.inventoryTracker.${LOCK_GROUP_BY_TYPE[type]}`;
+}
+
 export interface ProjectDossierToPlayerStatsArgs {
   /** Straight off `reconcileItemDossier`'s return value. */
   dossier: PersistentItemDossier | null | undefined;
@@ -41,9 +62,11 @@ export interface ProjectDossierToPlayerStatsArgs {
   context: ItemDossierReconcileContext;
   /**
    * Per-field lock test, injected so the projector never has to know the lock
-   * key format. A locked array keeps the value it already had.
+   * key format. It receives a GROUP PREFIX (`player.inventoryTracker.currencies`),
+   * and a row-level lock beneath that prefix counts as protecting the group. A
+   * locked array keeps the value it already had.
    */
-  isFieldLocked?: (fieldKey: string) => boolean;
+  isFieldLocked?: (groupKeyPrefix: string) => boolean;
 }
 
 export interface ProjectDossierToPlayerStatsResult {
@@ -116,7 +139,8 @@ export function projectDossierToPlayerStats(args: ProjectDossierToPlayerStatsArg
 
   for (const type of PROJECTED_TYPES) {
     const field = INVENTORY_TRACKER_STATS_FIELDS[type];
-    if (args.isFieldLocked?.(field)) continue;
+    // Ask with the group prefix the panel actually writes, not the field name.
+    if (args.isFieldLocked?.(inventoryTrackerGroupLockPrefix(type))) continue;
     const rows = [...buckets[type]]
       .sort(byCreationOrder)
       .map((stack) => projectStack(stack, definitions.get(stack.definitionId)));
@@ -141,7 +165,7 @@ export async function reconcileAndProjectItemDossier(
   context: ItemDossierReconcileContext,
   projection: {
     playerStats: Record<string, unknown> | null | undefined;
-    isFieldLocked?: (fieldKey: string) => boolean;
+    isFieldLocked?: (groupKeyPrefix: string) => boolean;
   },
 ): Promise<ProjectDossierToPlayerStatsResult & { dossier: PersistentItemDossier }> {
   const dossier = await reconcileItemDossier(storage, chatId, rows, context);
