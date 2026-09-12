@@ -3307,9 +3307,14 @@ async function applyRetryResultEffects(args: {
           },
           {
             playerStats: inventoryTrackerPatch.playerStats,
-            // A pinned tracker array keeps whatever the user left there.
-            isFieldLocked: (field) =>
-              (retryLockState?.fieldLocks as Record<string, boolean> | null | undefined)?.[field] === true,
+            // A pinned tracker array keeps whatever the user left there. The
+            // projection asks with a GROUP PREFIX (player.inventoryTracker.currencies),
+            // so a group lock or any row-level lock beneath it both count -- the
+            // same prefix rule the shared tracker-lock merge uses.
+            isFieldLocked: (prefix) =>
+              Object.entries((retryLockState?.fieldLocks as Record<string, boolean>) ?? {}).some(
+                ([key, locked]) => locked === true && (key === prefix || key.startsWith(`${prefix}.`)),
+              ),
           },
         );
         if (snap && (inventoryTrackerPatch.changed || dossierProjection.changed)) {
