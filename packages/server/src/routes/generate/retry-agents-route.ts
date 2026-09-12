@@ -242,10 +242,8 @@ import {
   readSpotifyTrackUris,
   type SpotifyRuntimeAgent,
 } from "../../services/generation/spotify-agent-runtime.js";
-import { createPersistentItemDossierStorage } from "../../services/storage/persistent-item-dossier.storage.js";
 import { buildDossierRowsFromInventoryTracker } from "../../services/storage/persistent-item-dossier.reconciler.js";
-import { reconcileAndProjectItemDossier } from "../../services/storage/persistent-item-dossier.projection.js";
-import { createItemDossierSnapshotStorage } from "../../services/storage/item-dossier-snapshot.storage.js";
+import { applyDossierUpdate } from "../../services/storage/persistent-item-dossier.apply.js";
 
 type PersonaContext = {
   // Persona-store ID only. A character-backed user identity keeps this null so
@@ -3273,7 +3271,6 @@ async function applyRetryResultEffects(args: {
           snapshot: snap,
           lockState: snap ? parseGameStateRow(snap as Record<string, unknown>) : null,
         });
-        const dossierStorage = createPersistentItemDossierStorage(args.app.db);
         const dossierRows = buildDossierRowsFromInventoryTracker({
           rawData: result.data as Record<string, unknown>,
           mergedPlayerStats: inventoryTrackerPatch.playerStats,
@@ -3296,35 +3293,29 @@ async function applyRetryResultEffects(args: {
         // the projection the model would see one changed potion as its entire
         // inventory while the dossier still holds the rest.
         const retryLockState = snap ? parseGameStateRow(snap as Record<string, unknown>) : null;
-        const dossierProjection = await reconcileAndProjectItemDossier(
-          dossierStorage,
+        // Walk the chat's message array back from the retry target to collect
+        // the ids strictly BEFORE it; the shared helper turns that into the
+        // rewind base and snapshots this turn when the dossier changed.
+        const retryAllMessages = await chats.listMessages(chatId);
+        assertRetryActive();
+        const retryAnchorIndex = retryAllMessages.findIndex((message: any) => message.id === retryMessageId);
+        const retryBaseIds =
+          retryAnchorIndex > 0 ? retryAllMessages.slice(0, retryAnchorIndex).map((message: any) => message.id) : [];
+        const dossierProjection = await applyDossierUpdate({
+          db: args.app.db,
           chatId,
-          dossierRows,
-          {
+          rows: dossierRows,
+          context: {
             presentCharacters: retryLockState?.presentCharacters ?? null,
             chatCharacters: retryChatCharacters,
             personaId: retryPersonaOwnerId,
             personaName: args.agentContext.persona?.name ?? null,
           },
-          {
-            playerStats: inventoryTrackerPatch.playerStats,
-            // A pinned tracker array keeps whatever the user left there. The
-            // projection asks with a GROUP PREFIX (player.inventoryTracker.currencies),
-            // so a group lock or any row-level lock beneath it both count -- the
-            // same prefix rule the shared tracker-lock merge uses.
-            isFieldLocked: (prefix) =>
-              Object.entries((retryLockState?.fieldLocks as Record<string, boolean>) ?? {}).some(
-                ([key, locked]) => locked === true && (key === prefix || key.startsWith(`${prefix}.`)),
-              ),
-            // Rewind/swipe history: the dossier is snapshotted against the
-            // message being retried whenever it changed, so a later swipe or
-            // rewind restores the state at that turn instead of the newest one.
-            snapshot: {
-              storage: createItemDossierSnapshotStorage(args.app.db),
-              anchor: { messageId: retryMessageId, swipeIndex: retrySwipeIndex },
-            },
-          },
-        );
+          fieldLocks: (retryLockState?.fieldLocks as Record<string, boolean> | null) ?? null,
+          playerStats: inventoryTrackerPatch.playerStats,
+          baseIds: retryBaseIds,
+          snapshotAnchor: { messageId: retryMessageId, swipeIndex: retrySwipeIndex },
+        });
         if (snap && (inventoryTrackerPatch.changed || dossierProjection.changed)) {
           assertRetryActive();
           await app.db

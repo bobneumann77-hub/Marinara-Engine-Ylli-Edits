@@ -118,9 +118,7 @@ import { createCustomStickersStorage } from "../services/storage/custom-stickers
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
-import { createPersistentItemDossierStorage } from "../services/storage/persistent-item-dossier.storage.js";
-import { reconcileAndProjectItemDossier } from "../services/storage/persistent-item-dossier.projection.js";
-import { createItemDossierSnapshotStorage } from "../services/storage/item-dossier-snapshot.storage.js";
+import { applyDossierUpdate } from "../services/storage/persistent-item-dossier.apply.js";
 import { buildDossierRowsFromInventoryTracker } from "../services/storage/persistent-item-dossier.reconciler.js";
 import { getCustomAgentImportPolicy } from "../services/agents/custom-agent-import-policy.service.js";
 import { buildLorebookSemanticEmbeddingsById, warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
@@ -10105,7 +10103,6 @@ export async function generateRoutes(app: FastifyInstance) {
                   snapshot: snap,
                   lockState,
                 });
-                const dossierStorage = createPersistentItemDossierStorage(app.db);
                 const dossierRows = buildDossierRowsFromInventoryTracker({
                   rawData: result.data as Record<string, unknown>,
                   mergedPlayerStats: inventoryTrackerPatch.playerStats,
@@ -10119,21 +10116,13 @@ export async function generateRoutes(app: FastifyInstance) {
                   chars.getById(id),
                 );
                 const chatCharacters = [...chatCharacterNameById].map(([characterId, name]) => ({ characterId, name }));
-                // Reconcile the agent's DELTAS onto the dossier, then re-derive
-                // the persona's three tracker arrays from it. The agent emits
-                // deltas while `buildLockedInventoryTrackerPatch` replaces a whole
-                // group whenever it is emitted, so one changed potion would
-                // otherwise show the model a one-item inventory while the dossier
-                // still holds the rest. Local `playerStats` is the merge base, so
-                // every non-tracker key survives untouched. The wrapper also owns
-                // the rewind/swipe snapshot, so any future dossier writer inherits
-                // it instead of each call site remembering to write history.
                 // Rewind/swipe base: resolve the anchor (the message being
-                // regenerated, or the last assistant message) and take the newest
-                // dossier snapshot among the messages BEFORE it. The chat's own
-                // message array carries order, so the walk is messageId-based --
-                // a snapshot's `createdAt` is when the AGENT wrote it, which can
-                // be weeks after the message it belongs to. No snapshot yet means
+                // regenerated, or the last assistant message) and collect the
+                // message ids strictly BEFORE it. The shared helper turns that
+                // walk into the newest dossier snapshot among them; order comes
+                // from the chat's own message array, not from timestamps, because
+                // a snapshot's `createdAt` is when the AGENT wrote it and can be
+                // weeks after the message it belongs to. No snapshot yet means
                 // the reconciler falls back to the live row, which is correct for
                 // chats that predate this history.
                 const dossierAnchor = input.regenerateMessageId
@@ -10146,15 +10135,16 @@ export async function generateRoutes(app: FastifyInstance) {
                   dossierAnchorIndex > 0
                     ? allChatMessages.slice(0, dossierAnchorIndex).map((message: any) => message.id)
                     : [];
-                const dossierBaseSnapshot = await createItemDossierSnapshotStorage(app.db).getLatestForMessages(
-                  input.chatId,
-                  dossierBaseIds,
-                );
-                const projectedPlayerStats = await reconcileAndProjectItemDossier(
-                  dossierStorage,
-                  input.chatId,
-                  dossierRows,
-                  {
+                // Reconcile the agent's DELTAS onto the resolved base, project
+                // the dossier back into `playerStats`, and snapshot when it
+                // changed. The shared helper owns the rewind base, the
+                // prefix-aware lock predicate, and the change-gated snapshot, so
+                // every dossier writer uses one shape.
+                const projectedPlayerStats = await applyDossierUpdate({
+                  db: app.db,
+                  chatId: input.chatId,
+                  rows: dossierRows,
+                  context: {
                     presentCharacters: snap
                       ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters
                       : null,
@@ -10165,29 +10155,13 @@ export async function generateRoutes(app: FastifyInstance) {
                     personaId: resolvedUserIdentity?.id ?? null,
                     personaName: resolvedUserIdentity?.name ?? null,
                   },
-                  {
-                    playerStats: inventoryTrackerPatch.playerStats,
-                    // Merge onto the state at the resolved anchor, not the live
-                    // row, so a rewind continues the branch it rewound to.
-                    // Omitted when no snapshot exists yet, so pre-upgrade chats
-                    // keep merging onto the live row.
-                    base: dossierBaseSnapshot?.dossier,
-                    // A pinned tracker array keeps whatever the user left there.
-                    // The panel writes group locks as `player.inventoryTracker.<group>`
-                    // and row locks beneath that same prefix, so either one pins the array.
-                    isFieldLocked: (prefix) =>
-                      Object.entries((lockState?.fieldLocks as Record<string, boolean> | null | undefined) ?? {}).some(
-                        ([key, locked]) => locked === true && (key === prefix || key.startsWith(`${prefix}.`)),
-                      ),
-                    // Rewind/swipe history. Snapshotted against this message only
-                    // when the dossier actually changed, using the same anchor the
-                    // game-state snapshot above is keyed to.
-                    snapshot: {
-                      storage: createItemDossierSnapshotStorage(app.db),
-                      anchor: { messageId, swipeIndex: targetSwipeIndex },
-                    },
-                  },
-                );
+                  // A pinned tracker array keeps whatever the user left there; the
+                  // helper applies the same prefix rule the panel writes.
+                  fieldLocks: (lockState?.fieldLocks as Record<string, boolean> | null) ?? null,
+                  playerStats: inventoryTrackerPatch.playerStats,
+                  baseIds: dossierBaseIds,
+                  snapshotAnchor: { messageId, swipeIndex: targetSwipeIndex },
+                });
                 if (snap && (inventoryTrackerPatch.changed || projectedPlayerStats.changed)) {
                   await app.db
                     .update(gameStateSnapshotsTable)
