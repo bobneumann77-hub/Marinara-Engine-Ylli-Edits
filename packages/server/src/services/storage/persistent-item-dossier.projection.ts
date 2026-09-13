@@ -201,9 +201,17 @@ export async function reconcileAndProjectItemDossier(
   // Change-detection baseline: diff against the same state the reconcile
   // merged onto. A rewound branch must not be compared to the live row, which
   // belongs to a different branch and would read as a spurious change.
+  // A1: clone the supplied base. When `base` is an object the reconciler
+  // mutates it in place and returns that same object, so an uncloned baseline
+  // would compare equal to itself and `dossierChanged` would report "unchanged"
+  // on every turn after the first snapshot. The clone keeps the baseline a real
+  // before-state. `undefined` still means "read the live row", and `null` still
+  // means "no prior state", so both keep their existing meaning.
   const dossierBefore =
     projection.base !== undefined
-      ? (projection.base ?? null)
+      ? projection.base
+        ? structuredClone(projection.base)
+        : null
       : projection.snapshot
         ? await storage.getForChat(chatId)
         : null;

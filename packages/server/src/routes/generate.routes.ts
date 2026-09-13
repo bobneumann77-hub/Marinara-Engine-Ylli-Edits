@@ -10761,25 +10761,28 @@ export async function generateRoutes(app: FastifyInstance) {
                   chars.getById(id),
                 );
                 const chatCharacters = [...chatCharacterNameById].map(([characterId, name]) => ({ characterId, name }));
-                // Rewind/swipe base: resolve the anchor (the message being
-                // regenerated, or the last assistant message) and collect the
-                // message ids strictly BEFORE it. The shared helper turns that
-                // walk into the newest dossier snapshot among them; order comes
-                // from the chat's own message array, not from timestamps, because
-                // a snapshot's `createdAt` is when the AGENT wrote it and can be
-                // weeks after the message it belongs to. No snapshot yet means
-                // the reconciler falls back to the live row, which is correct for
-                // chats that predate this history.
-                const dossierAnchor = input.regenerateMessageId
-                  ? resolveRegenerationGameStateAnchor(scopedMessages, input.regenerateMessageId)
-                  : resolveVisibleGameStateAnchor(allChatMessages);
-                const dossierAnchorIndex = dossierAnchor
-                  ? allChatMessages.findIndex((message: any) => message.id === dossierAnchor.messageId)
-                  : -1;
+                // Rewind/swipe base: cut the chat's own message array on the
+                // TARGET message -- the one this turn's snapshot is keyed to --
+                // and hand the ids strictly before it to the shared helper, which
+                // picks the newest dossier snapshot among them.
+                //
+                // Cutting on the target, rather than on a resolved anchor, is
+                // what makes a normal turn correct: the in-flight assistant
+                // message is not in this pre-generation array, so the cut falls
+                // through to every loaded id -- which still includes the PREVIOUS
+                // turn's message, so the base is the state right after the last
+                // completed turn. On a regeneration or swipe the target IS in the
+                // array, so the cut excludes it and the base is the state before
+                // that message. Order comes from the message array, not
+                // timestamps: a snapshot's `createdAt` is when the AGENT wrote it
+                // and can be weeks after the message it belongs to. No snapshot
+                // yet means the reconciler falls back to the live row, which is
+                // correct for chats that predate this history.
+                const dossierTargetIndex = allChatMessages.findIndex((message: any) => message.id === messageId);
                 const dossierBaseIds =
-                  dossierAnchorIndex > 0
-                    ? allChatMessages.slice(0, dossierAnchorIndex).map((message: any) => message.id)
-                    : [];
+                  dossierTargetIndex >= 0
+                    ? allChatMessages.slice(0, dossierTargetIndex).map((message: any) => message.id)
+                    : allChatMessages.map((message: any) => message.id);
                 // Reconcile the agent's DELTAS onto the resolved base, project
                 // the dossier back into `playerStats`, and snapshot when it
                 // changed. The shared helper owns the rewind base, the

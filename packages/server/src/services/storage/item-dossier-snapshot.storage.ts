@@ -3,16 +3,19 @@
 // ──────────────────────────────────────────────
 // Per-message history of the persistent item dossier. Mirrors
 // `game-state.storage.ts` so rewind, swipe, and regeneration reuse the same
-// anchor helpers and the same "nearest snapshot at or before" read.
+// messageId-anchored read: the newest snapshot among the messages that come
+// before the anchor.
 //
 // Design notes:
 // - Written only on turns where the reconciler reports a change, so chats that
 //   never touch items cost nothing.
 // - Definitions ride along with the stacks, so a rewound stack whose definition
 //   the live dossier has since dropped still renders correctly.
-// - Stacks are never physically deleted from the dossier; `isDestroyed` marks a
-//   removal. History therefore has no holes to reconstruct.
-import { and, desc, eq, inArray, lte } from "../../db/file-query.js";
+// - Destroyed commodities are physically removed from the live dossier; only
+//   destroyed uniques are kept (at `qty: 0`), matching the reconciler's cleanup
+//   tail. Rewind restores either kind because every snapshot is a full copy of
+//   the dossier at that turn, not a delta.
+import { and, desc, eq, inArray } from "../../db/file-query.js";
 import type { DB } from "../../db/connection.js";
 import { itemDossierSnapshots } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
@@ -27,27 +30,11 @@ export interface ItemDossierSnapshotRow {
   createdAt: string;
 }
 
-export interface ItemDossierAnchor {
-  messageId: string;
-  swipeIndex: number;
-}
-
 export interface ItemDossierSnapshotStorage {
   /** Most recent snapshot for a chat, in any branch. Panel / UI reads. */
   getLatest(chatId: string): Promise<ItemDossierSnapshotRow | null>;
   /** Snapshot stored for this exact message + swipe, if any. */
   getExact(chatId: string, messageId: string, swipeIndex: number): Promise<ItemDossierSnapshotRow | null>;
-  /**
-   * Snapshot at or before an anchor. Exact hit when the anchor has one,
-   * otherwise the newest row written before that message. Returns `null` when
-   * the anchor predates every snapshot, so callers can fall back to the live
-   * dossier or to `getLatest`.
-   */
-  getAtOrBefore(
-    chatId: string,
-    anchor: ItemDossierAnchor,
-    anchorCreatedAt?: string | null,
-  ): Promise<ItemDossierSnapshotRow | null>;
   /**
    * Newest snapshot among the given message ids — the messageId-anchored walk.
    *
@@ -111,22 +98,6 @@ export function createItemDossierSnapshotStorage(db: DB): ItemDossierSnapshotSto
             eq(itemDossierSnapshots.swipeIndex, swipeIndex),
           ),
         )
-        .limit(1);
-      return rows[0] ? parseRow(rows[0]) : null;
-    },
-
-    async getAtOrBefore(chatId, anchor, anchorCreatedAt) {
-      const exact = await this.getExact(chatId, anchor.messageId, anchor.swipeIndex);
-      if (exact) return exact;
-      // No row for this message: walk backwards. `anchorCreatedAt` is the anchor
-      // message's own timestamp, so any snapshot at or before it belongs to an
-      // earlier turn and is the correct rewind base.
-      if (!anchorCreatedAt) return null;
-      const rows = await db
-        .select()
-        .from(itemDossierSnapshots)
-        .where(and(eq(itemDossierSnapshots.chatId, chatId), lte(itemDossierSnapshots.createdAt, anchorCreatedAt)))
-        .orderBy(desc(itemDossierSnapshots.createdAt))
         .limit(1);
       return rows[0] ? parseRow(rows[0]) : null;
     },
