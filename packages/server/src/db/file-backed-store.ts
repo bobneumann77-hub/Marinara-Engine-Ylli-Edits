@@ -411,7 +411,7 @@ const BUILT_IN_FILE_BACKED_TABLES = [
   "mari_instructions",
   "mari_workspace_context",
   "persistent_item_dossier",
-  "item_dossier_snapshots",
+  "persistent_item_dossier_snapshots",
 ] as const;
 
 /**
@@ -476,6 +476,11 @@ const SHARD_KEY_COLUMNS: Record<string, string> = {
   game_turn_storyboards: "chatId",
   game_turn_storyboard_keyframes: "storyboardId",
   game_dice_pools: "chatId",
+  // Persistent item dossier: one owner per chat, like the per-chat history
+  // tables above, so a chat's dossier and its snapshots live in one file each
+  // (named after the chat) instead of one file per row.
+  persistent_item_dossier: "chatId",
+  persistent_item_dossier_snapshots: "chatId",
   chat_images: "chatId",
   character_images: "characterId",
   persona_images: "personaId",
@@ -533,6 +538,10 @@ const LAZY_UNIT_TABLES: ReadonlySet<string> =
         "conversation_notes",
         "conversation_call_sessions",
         "conversation_call_messages",
+        // Persistent item dossier family: chatId-keyed like the tables above,
+        // so they join the per-chat lazy unit instead of loading at boot.
+        "persistent_item_dossier",
+        "persistent_item_dossier_snapshots",
       ]);
 
 /**

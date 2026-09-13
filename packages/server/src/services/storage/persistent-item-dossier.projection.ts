@@ -21,7 +21,7 @@ import {
   type DossierAgentRow,
   type ItemDossierReconcileContext,
 } from "./persistent-item-dossier.reconciler.js";
-import type { ItemDossierSnapshotStorage } from "./item-dossier-snapshot.storage.js";
+import type { ItemDossierSnapshotStorage } from "./persistent-item-dossier-snapshot.storage.js";
 import type {
   DossierDefinition,
   DossierStack,

@@ -17,7 +17,7 @@
 //   the dossier at that turn, not a delta.
 import { and, desc, eq, inArray } from "../../db/file-query.js";
 import type { DB } from "../../db/connection.js";
-import { itemDossierSnapshots } from "../../db/schema/index.js";
+import { ItemDossierSnapshots } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
 import type { PersistentItemDossier } from "./persistent-item-dossier.storage.js";
 
