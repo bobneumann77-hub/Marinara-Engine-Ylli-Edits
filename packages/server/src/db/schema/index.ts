@@ -37,4 +37,4 @@ export * from "./noodle.js";
 export * from "./slurp.js";
 export * from "./library-folders.js";
 export * from "./persistent-item-dossier.js";
-export * from "./item-dossier-snapshot.js";
+export * from "./persistent-item-dossier-snapshot.js";

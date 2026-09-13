@@ -31,7 +31,7 @@
 import type { DB } from "../../db/connection.js";
 import { reconcileAndProjectItemDossier } from "./persistent-item-dossier.projection.js";
 import { createPersistentItemDossierStorage } from "./persistent-item-dossier.storage.js";
-import { createItemDossierSnapshotStorage } from "./item-dossier-snapshot.storage.js";
+import { createItemDossierSnapshotStorage } from "./persistent-item-dossier-snapshot.storage.js";
 import type { DossierAgentRow, ItemDossierReconcileContext } from "./persistent-item-dossier.reconciler.js";
 
 export interface ApplyDossierUpdateArgs {
