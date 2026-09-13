@@ -11,6 +11,7 @@ import {
   type PersistentItemDossier,
   type PersistentItemDossierStorage,
 } from "./persistent-item-dossier.storage.js";
+import { isDeepStrictEqual } from "node:util";
 import { newId, now } from "../../utils/id-generator.js";
 
 // ---------------------------------------------------------------------------
@@ -385,6 +386,35 @@ function mintStack(
   };
 }
 
+/**
+ * Content fields a tracker row can actually move.
+ *
+ * Used by `applyRowUpdate` to decide whether `updatedAt` should advance. The
+ * deliberate omissions are `updatedAt` itself, `lastSeenTurn` (a turn stamp)
+ * and `lastOwners` (provenance history): none of them describe the item's
+ * current state, so a row that merely restates a settled item leaves this
+ * snapshot unchanged and no redundant dossier snapshot gets written.
+ */
+function stackContentFields(stack: DossierStack): Record<string, unknown> {
+  return {
+    owner: stack.owner,
+    ownerId: stack.ownerId,
+    name: stack.name,
+    displayName: stack.displayName,
+    type: stack.type,
+    qty: stack.qty,
+    flair: stack.flair,
+    description: stack.description,
+    class: stack.class,
+    rarity: stack.rarity,
+    equipmentSlot: stack.equipmentSlot,
+    isUnique: stack.isUnique,
+    isDestroyed: stack.isDestroyed,
+    customFields: stack.customFields ?? null,
+    locationRef: stack.locationRef ?? null,
+  };
+}
+
 /** Apply a row to an existing stack. Omitted fields stay unchanged. */
 function applyRowUpdate(
   dossier: PersistentItemDossier,
@@ -394,6 +424,11 @@ function applyRowUpdate(
   owner: ResolvedOwner,
 ): void {
   const ts = now();
+  // Capture the content fields before mutating, so `updatedAt` only advances on
+  // a real change. A row that merely restates a settled item must leave the
+  // stack identical -- otherwise every turn looks dirty once the change-detection
+  // baseline is a real before-state, and each turn writes a redundant snapshot.
+  const contentBefore = stackContentFields(stack);
 
   // Owner change -> provenance. Only uniques keep a history worth reading.
   if (canonicalName(owner.name) !== canonicalName(stack.owner)) {
@@ -445,7 +480,12 @@ function applyRowUpdate(
 
   stack.locationRef = stampLocation(stack.locationRef ?? {}, row, context);
   if (context.currentTurn != null) stack.lastSeenTurn = context.currentTurn;
-  stack.updatedAt = ts;
+  // Only advance `updatedAt` when the row actually changed content. Turn stamps
+  // (`lastSeenTurn`) and provenance history (`lastOwners`) deliberately do not
+  // count: they track the turn, not the item's state.
+  if (!isDeepStrictEqual(contentBefore, stackContentFields(stack))) {
+    stack.updatedAt = ts;
+  }
 }
 
 /**
