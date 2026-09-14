@@ -41,6 +41,8 @@ export interface DossierAgentRow {
   description?: string;
   class?: string;
   rarity?: string;
+  /** Free-text descriptor from the agent's `location`; stored as `DossierStack.locationText`. */
+  location?: string;
   /** Omit for the persona's own items. On a `world` row, a non-persona owner means that character carries it. */
   owner?: string;
   isStolen?: boolean;
@@ -338,6 +340,7 @@ function mintStack(
     locationRef: stampLocation({}, row, context),
     qty: isUnique ? 1 : Math.max(1, Math.floor(row.qty ?? 1)),
     flair: row.flair ?? null,
+    locationText: row.location ?? null,
     isUnique,
     isDestroyed: row.isDestroyed === true,
     isStolen: row.isStolen === true,
@@ -363,6 +366,7 @@ function stackContentFields(stack: DossierStack): Record<string, unknown> {
     type: stack.type,
     qty: stack.qty,
     flair: stack.flair,
+    locationText: stack.locationText,
     description: stack.description,
     class: stack.class,
     rarity: stack.rarity,
@@ -422,6 +426,7 @@ function applyRowUpdate(
     stack.qty = stack.isUnique ? 1 : Math.max(0, Math.floor(row.qty));
   }
   if (row.flair !== undefined) stack.flair = row.flair || null;
+  if (row.location !== undefined) stack.locationText = row.location || null;
   if (row.description !== undefined) stack.description = row.description;
   if (row.class !== undefined) stack.class = row.class;
   if (row.rarity !== undefined) stack.rarity = row.rarity;
@@ -635,6 +640,7 @@ export function buildSeedRowsFromPlayerStats(
         name,
         type,
         qty: typeof row.qty === "number" ? row.qty : undefined,
+        location: readOptionalString(row.location),
         seededFromPlayerStats: true,
       });
     }
@@ -677,6 +683,7 @@ export function buildDossierRowsFromInventoryTracker({
         isDestroyed: row.isDestroyed === true ? true : undefined,
         flair,
         description: readOptionalString(row.description),
+        location: readOptionalString(row.location),
         class: readOptionalString(row.class),
         rarity: readOptionalString(row.rarity),
         owner,

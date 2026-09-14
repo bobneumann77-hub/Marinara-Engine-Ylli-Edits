@@ -149,7 +149,7 @@ function formatQuestLine(quest: any): string | null {
  * order. These are the stack fields the projection writes, minus `uuid` (engine
  * plumbing the model has no use for) and `qty`/`name` (always rendered).
  */
-export const INVENTORY_TRACKER_RENDER_FIELDS = ["flair", "rarity", "description", "class", "isUnique"] as const;
+export const INVENTORY_TRACKER_RENDER_FIELDS = ["flair", "rarity", "description", "class", "location", "isUnique"] as const;
 export type InventoryTrackerRenderField = (typeof INVENTORY_TRACKER_RENDER_FIELDS)[number];
 
 /**
@@ -158,11 +158,7 @@ export type InventoryTrackerRenderField = (typeof INVENTORY_TRACKER_RENDER_FIELD
  * condition. The list is a PARAMETER so a per-chat picker can widen it later
  * without a second renderer -- that seam is the whole point of the signature.
  */
-const DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS: readonly InventoryTrackerRenderField[] = [
-  "flair",
-  "description",
-  "location",
-];
+const DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS: readonly InventoryTrackerRenderField[] = ["flair", "description"];
 
 function formatInventoryTrackerLine(
   item: any,
