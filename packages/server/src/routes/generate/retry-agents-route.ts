@@ -3414,8 +3414,14 @@ async function applyRetryResultEffects(args: {
         const retryAllMessages = await chats.listMessages(chatId);
         assertRetryActive();
         const retryAnchorIndex = retryAllMessages.findIndex((message: any) => message.id === retryMessageId);
-        const retryBaseIds =
-          retryAnchorIndex > 0 ? retryAllMessages.slice(0, retryAnchorIndex).map((message: any) => message.id) : [];
+        // Each ancestor travels with its ACTIVE swipe: every swipe of one message
+        // shares a messageId, so the base walk has to know which branch is live.
+        const retryBaseAnchors = (retryAnchorIndex > 0 ? retryAllMessages.slice(0, retryAnchorIndex) : []).map(
+          (message: any) => ({
+            messageId: message.id as string,
+            swipeIndex: (message.activeSwipeIndex as number | undefined) ?? 0,
+          }),
+        );
         const dossierProjection = await applyDossierUpdate({
           db: args.app.db,
           chatId,
@@ -3428,7 +3434,7 @@ async function applyRetryResultEffects(args: {
           },
           fieldLocks: (retryLockState?.fieldLocks as Record<string, boolean> | null) ?? null,
           playerStats: inventoryTrackerPatch.playerStats,
-          baseIds: retryBaseIds,
+          baseAnchors: retryBaseAnchors,
           snapshotAnchor: { messageId: retryMessageId, swipeIndex: retrySwipeIndex },
         });
         if (snap && (inventoryTrackerPatch.changed || dossierProjection.changed)) {

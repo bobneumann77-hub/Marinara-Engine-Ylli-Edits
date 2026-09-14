@@ -3,8 +3,8 @@
 // ──────────────────────────────────────────────
 // Per-message history of the persistent item dossier. Mirrors
 // `game-state.storage.ts` so rewind, swipe, and regeneration reuse the same
-// messageId-anchored read: the newest snapshot among the messages that come
-// before the anchor.
+// anchor walk: the snapshot of the nearest ancestor message, read at that
+// message's own active swipe.
 //
 // Design notes:
 // - Written only on turns where the reconciler reports a change, so chats that
@@ -36,19 +36,26 @@ export interface ItemDossierSnapshotStorage {
   /** Snapshot stored for this exact message + swipe, if any. */
   getExact(chatId: string, messageId: string, swipeIndex: number): Promise<ItemDossierSnapshotRow | null>;
   /**
-   * Newest snapshot among the given message ids — the messageId-anchored walk.
+   * The merge base for a turn: the snapshot of the NEAREST ancestor message, at
+   * that message's own active swipe.
    *
-   * Mirrors `game-state.storage.ts#getLatestForMessages`. The chat's message
-   * array already carries order, so the caller walks it backwards from the
-   * anchor and hands the candidate ids here; the table only has to pick the
-   * newest row among them. A timestamp comparison cannot do this job, because
-   * a snapshot's `createdAt` is when the AGENT wrote it, which can be weeks
-   * after the message it belongs to.
+   * `anchors` is the chat's message array up to the turn being generated, in
+   * chat order with the newest last. Message ORDER decides, not `createdAt`: a
+   * snapshot's clock is when the AGENT wrote it, so it can be weeks after the
+   * message it belongs to. Inactive swipes are skipped -- every swipe of one
+   * message shares a `messageId`, so without that filter the newest-written
+   * swipe would win even after the user swiped away from it, and the branch
+   * would merge onto a state it never had.
    *
-   * Returns `null` when none of the candidates has a snapshot, so the caller
-   * can fall back to the live dossier.
+   * Returns `null` when no ancestor has a snapshot. Callers treat that as an
+   * empty branch rather than falling back to the live dossier: the live row
+   * belongs to whichever branch ran last, so merging it in would leak items
+   * into a branch that never had them.
    */
-  getLatestForMessages(chatId: string, messageIds: string[]): Promise<ItemDossierSnapshotRow | null>;
+  getLatestForAnchors(
+    chatId: string,
+    anchors: Array<{ messageId: string; swipeIndex: number }>,
+  ): Promise<ItemDossierSnapshotRow | null>;
   /** Upsert the snapshot for one message + swipe. */
   saveSnapshot(chatId: string, messageId: string, swipeIndex: number, dossier: PersistentItemDossier): Promise<void>;
   /** Cascade hook: drop every snapshot attached to the given messages. */
@@ -102,15 +109,40 @@ export function createItemDossierSnapshotStorage(db: DB): ItemDossierSnapshotSto
       return rows[0] ? parseRow(rows[0]) : null;
     },
 
-    async getLatestForMessages(chatId, messageIds) {
-      if (messageIds.length === 0) return null;
+    async getLatestForAnchors(chatId, anchors) {
+      if (anchors.length === 0) return null;
+      const activeSwipeByMessage = new Map(anchors.map((anchor) => [anchor.messageId, anchor.swipeIndex]));
       const rows = await db
         .select()
         .from(itemDossierSnapshots)
-        .where(and(eq(itemDossierSnapshots.chatId, chatId), inArray(itemDossierSnapshots.messageId, messageIds)))
-        .orderBy(desc(itemDossierSnapshots.createdAt))
-        .limit(1);
-      return rows[0] ? parseRow(rows[0]) : null;
+        .where(
+          and(
+            eq(itemDossierSnapshots.chatId, chatId),
+            inArray(
+              itemDossierSnapshots.messageId,
+              anchors.map((anchor) => anchor.messageId),
+            ),
+          ),
+        );
+      // Keep only the ACTIVE swipe of each ancestor. `saveSnapshot` upserts on
+      // (messageId, swipeIndex), so at most one row survives per message.
+      const byMessage = new Map<string, (typeof rows)[number]>();
+      for (const row of rows) {
+        if (activeSwipeByMessage.get(row.messageId) !== row.swipeIndex) continue;
+        const current = byMessage.get(row.messageId);
+        if (!current || row.createdAt > current.createdAt) byMessage.set(row.messageId, row);
+      }
+      // Nearest ancestor wins: walk the caller's own message order backwards.
+      for (let index = anchors.length - 1; index >= 0; index -= 1) {
+        // `anchors[index]` reads as possibly-undefined under
+        // noUncheckedIndexedAccess because the index is a variable; the loop
+        // bound already keeps it in range, so the guard is only for the type.
+        const anchor = anchors[index];
+        if (!anchor) continue;
+        const row = byMessage.get(anchor.messageId);
+        if (row) return parseRow(row);
+      }
+      return null;
     },
 
     async saveSnapshot(chatId, messageId, swipeIndex, dossier) {
