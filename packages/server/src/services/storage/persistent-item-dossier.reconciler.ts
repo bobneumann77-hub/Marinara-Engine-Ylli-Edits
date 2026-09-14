@@ -37,6 +37,11 @@ export interface DossierAgentRow {
   qty?: number;
   isUnique?: boolean;
   isDestroyed?: boolean;
+  /**
+   * Engine-internal: set by the inventory adapter for an entry in a group's
+   * `removed` list. Match-only -- an unmatched removal is dropped, never minted.
+   */
+  removal?: boolean;
   flair?: string;
   description?: string;
   class?: string;
@@ -256,7 +261,11 @@ function findStack(
   const key = canonicalName(row.name);
   const ownerKey = canonicalName(row.owner);
   const type = row.type ?? "inventory";
+  // Destroyed stacks are invisible to name matching: re-creating a destroyed
+  // item must mint a fresh pile, not resurrect the corpse's provenance. A cited
+  // uuid still matches above on purpose -- that is a deliberate resurrection.
   const scoped = (s: DossierStack) =>
+    !s.isDestroyed &&
     canonicalName(resolvedStackName(s, dossier)) === key &&
     s.type === type &&
     ((ownerId !== null && s.ownerId === ownerId) || canonicalName(s.owner) === ownerKey);
@@ -270,6 +279,25 @@ function findStack(
     if (byFlair) return byFlair;
   }
   return dossier.stacks.find(scoped);
+}
+
+/**
+ * Match-only destroy for a `removed` entry: uuid first, then the scoped name
+ * tiers. Destroyed stacks are never re-matched, and an unmatched entry is
+ * dropped silently -- a removal must never mint.
+ */
+function destroyRemovedStack(
+  dossier: PersistentItemDossier,
+  row: DossierAgentRow,
+  ownerId: string | null,
+): void {
+  let target: DossierStack | undefined;
+  if (row.uuid) target = dossier.stacks.find((s) => s.id === row.uuid && !s.isDestroyed);
+  if (!target && canonicalName(row.name)) target = findStack(dossier, row, ownerId);
+  if (target && !target.isDestroyed) {
+    target.isDestroyed = true;
+    target.updatedAt = now();
+  }
 }
 
 /** Find the definition a row's name belongs to, with a bounded plural allowance. */
@@ -435,7 +463,14 @@ function applyRowUpdate(
     stack.isUnique = row.isUnique;
     if (row.isUnique) stack.qty = 1;
   }
-  if (row.isDestroyed === true) stack.isDestroyed = true;
+  if (row.isDestroyed === true) {
+    stack.isDestroyed = true;
+  } else if (stack.isDestroyed) {
+    // Only a uuid match can reach a destroyed stack (name tiers skip them), so
+    // an update landing here is an explicit re-creation: revive the pile.
+    stack.isDestroyed = false;
+    if (stack.qty <= 0) stack.qty = 1;
+  }
   if (row.isStolen !== undefined) stack.isStolen = row.isStolen;
   if (row.isGifted !== undefined) stack.isGifted = row.isGifted;
   if (row.customFields !== undefined) {
@@ -548,6 +583,12 @@ export async function reconcileItemDossier(
   for (const raw of rows) {
     if (!canonicalName(raw.name)) continue;
     if (raw.seededFromPlayerStats && !isFirstRun) continue;
+    // Removals are match-only and never mint, so they run before the name gate:
+    // a `removed` entry may carry only a uuid.
+    if (raw.removal) {
+      destroyRemovedStack(dossier, raw, resolveOwner(raw.owner, context).id);
+      continue;
+    }
 
     const owner = resolveOwner(raw.owner, context);
     const row: DossierAgentRow = { ...raw, owner: owner.name };
@@ -651,7 +692,7 @@ export function buildSeedRowsFromPlayerStats(
 /**
  * A group is either a legacy full array or the incremental envelope the host
  * advertises via `tracker_incremental_updates: supported`. Envelope rows are the
- * same shape; `removed` is handled separately by the reconciler.
+ * same shape; `removed` is consumed by the adapter's removal pass below.
  */
 function readGroupRows(group: unknown): Record<string, unknown>[] {
   if (Array.isArray(group)) return group as Record<string, unknown>[];
@@ -706,6 +747,44 @@ export function buildDossierRowsFromInventoryTracker({
           row.customFields && typeof row.customFields === "object" && !Array.isArray(row.customFields)
             ? (row.customFields as Record<string, unknown>)
             : undefined,
+      });
+    }
+  }
+
+  // `removed` entries become match-only removal rows, appended after every
+  // group's update rows. A removal whose identity was ALSO updated this turn
+  // is a move (the default prompt removes on move), not a deletion.
+  const updatedUuids = new Set<string>();
+  const updatedNames = new Set<string>();
+  for (const row of rows.values()) {
+    if (row.uuid) updatedUuids.add(row.uuid);
+    updatedNames.add(canonicalName(row.name));
+  }
+  for (const [field, type] of Object.entries(INVENTORY_TRACKER_GROUP_TYPES)) {
+    if (field === "world") continue; // world is a full snapshot; nothing deletes through it
+    const group = rawData?.[field];
+    if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+    const removed = (group as { removed?: unknown }).removed;
+    if (!Array.isArray(removed)) continue;
+    for (const entry of removed) {
+      const reference =
+        typeof entry === "string"
+          ? { name: entry }
+          : entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as Record<string, unknown>)
+            : undefined;
+      if (!reference) continue;
+      const removedUuid = readOptionalString(reference.uuid);
+      const removedName = readOptionalString(reference.name);
+      if (!removedUuid && !removedName) continue;
+      if ((removedUuid && updatedUuids.has(removedUuid)) || updatedNames.has(canonicalName(removedName))) {
+        continue;
+      }
+      rows.set(`removed:${field}:${removedUuid ?? canonicalName(removedName)}`, {
+        uuid: removedUuid,
+        name: removedName ?? "",
+        type,
+        removal: true,
       });
     }
   }
