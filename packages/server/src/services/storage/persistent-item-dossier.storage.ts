@@ -84,6 +84,12 @@ export interface DossierStack {
   locationRef: DossierLocationRef; // where it physically is
   qty: number;
   flair?: string | null; // "poisoned", "wrapped in oilcloth"
+  /**
+   * Free-text descriptor from the tracker agent ("backpack side pocket", "Fel's
+   * room"). Display only: `stackLocationKey` never reads it, so rewording a
+   * descriptor cannot split one pile into two.
+   */
+  locationText?: string | null;
   isUnique: boolean;
   isDestroyed: boolean;
   /** Acquisition flavour for the panel and journal. Never affects matching. */

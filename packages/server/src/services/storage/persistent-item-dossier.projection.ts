@@ -86,6 +86,8 @@ function projectStack(stack: DossierStack, definition: DossierDefinition | undef
   if (rarity) row.rarity = rarity;
   if (description) row.description = description;
   if (flair) row.flair = flair;
+  const location = optionalText(stack.locationText);
+  if (location) row.location = location;
   if (stack.isUnique) row.isUnique = true;
   return row;
 }
