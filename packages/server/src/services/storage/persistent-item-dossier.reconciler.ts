@@ -649,6 +649,20 @@ export function buildSeedRowsFromPlayerStats(
 }
 
 /**
+ * A group is either a legacy full array or the incremental envelope the host
+ * advertises via `tracker_incremental_updates: supported`. Envelope rows are the
+ * same shape; `removed` is handled separately by the reconciler.
+ */
+function readGroupRows(group: unknown): Record<string, unknown>[] {
+  if (Array.isArray(group)) return group as Record<string, unknown>[];
+  if (group && typeof group === "object" && !Array.isArray(group)) {
+    const updates = (group as { updates?: unknown }).updates;
+    if (Array.isArray(updates)) return updates as Record<string, unknown>[];
+  }
+  return [];
+}
+
+/**
  * Adapter: the inventory tracker's shape -> shared dossier rows. `rawData` is
  * the agent's own JSON BEFORE normalization, so its rich fields survive;
  * `mergedPlayerStats` contributes seed rows only, for items no agent row already
@@ -665,9 +679,7 @@ export function buildDossierRowsFromInventoryTracker({
 
   // Agent rows: the only source of live changes.
   for (const [field, type] of Object.entries(INVENTORY_TRACKER_GROUP_TYPES)) {
-    const group = rawData?.[field];
-    if (!Array.isArray(group)) continue;
-    for (const raw of group) {
+    for (const raw of readGroupRows(rawData?.[field])) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
       const row = raw as Record<string, unknown>;
       const name = readOptionalString(row.name);
