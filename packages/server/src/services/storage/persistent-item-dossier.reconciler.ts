@@ -342,7 +342,7 @@ function mintStack(
     isDestroyed: row.isDestroyed === true,
     isStolen: row.isStolen === true,
     isGifted: row.isGifted === true,
-    isStored: false,
+    isStored: false, // not yet settable; see DossierStack.isStored
     lastSeenTurn: context.currentTurn ?? null,
     createdAt: ts,
     updatedAt: ts,
