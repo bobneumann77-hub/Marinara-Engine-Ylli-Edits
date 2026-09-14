@@ -1,7 +1,6 @@
 // packages/server/src/services/storage/character-name-map.ts
-// Character id -> display name resolution for owner context. Lives here rather
-// than in routes/ so the dossier write path can resolve owner context without
-// importing a route module; routes/generate/generate-route-utils.ts re-exports
+// Character id -> display name for owner context. Lives below routes/ so the
+// storage layer never imports a route module; generate-route-utils.ts re-exports
 // it for its existing callers.
 
 export interface CharacterIdentity {
@@ -45,6 +44,10 @@ export async function resolveCharacterIdentityMap(
   return new Map(entries.filter((entry): entry is readonly [string, CharacterIdentity] => !!entry));
 }
 
+/**
+ * Map character ids to their card display names. Pure: the caller supplies the
+ * lookup. Ids whose card is gone, unreadable, or nameless are absent.
+ */
 export async function resolveCharacterNameMap(
   characterIds: string[],
   getCharacterById: (id: string) => Promise<{ data?: unknown } | null | undefined>,

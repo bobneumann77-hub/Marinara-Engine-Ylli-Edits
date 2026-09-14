@@ -25,18 +25,9 @@ export interface DossierMapObservation extends DossierLocationObservation {
 }
 
 /**
- * Where a stack physically is. Observations NEVER overwrite or clear each other:
- * each source refreshes only its own field, and recency (`at`) alone decides
- * which one wins. This keeps the World Maps pointer alive across World State
- * renames ("Fel's room" -> "Fel's quarters" -> "Room of Fel") while still letting
- * a newer World State sighting supersede a stale map id after the item genuinely
- * moves to an unmapped room.
- *
- * Matching against the current scene, in order:
- *   1. map.id === current map id AND map.at >= world.at  -> confirmed
- *   2. world.name or map.name normalized-equals current  -> name match
- *   3. no observations, or no current location info       -> fail open (thin rows)
- *   4. otherwise a known, different place                 -> hidden
+ * Where a stack physically is. Each source refreshes only its own field and
+ * recency (`at`) decides at read time, so a World Maps pointer survives World
+ * State renames while a newer sighting can supersede a stale map id.
  */
 export interface DossierLocationRef {
   /** Carried or worn by `DossierStack.owner`. */
@@ -48,11 +39,9 @@ export interface DossierLocationRef {
 }
 
 /**
- * The item TEMPLATE. No quantity, no owner, no location.
- * `isNamedArtifact` marks canonical one-of-a-kind items (Frostmourne):
- * the engine refuses to mint a second stack for this definition.
- * Ordinary items that the story upgrades (iron sword → enchanted) get
- * `isUnique: true` on the STACK, not here.
+ * The item TEMPLATE: no quantity, owner, or location. `isNamedArtifact` marks
+ * canonical one-of-a-kind items (Frostmourne), which can never mint a second
+ * stack; ordinary story upgrades set `isUnique` on the STACK instead.
  */
 export interface DossierDefinition {
   id: string;
@@ -70,16 +59,12 @@ export interface DossierDefinition {
 }
 
 /**
- * The item PILE. One per owner + type + location + flair.
- * 10 arrows on you, 200 in your room, 15 in a shop = three stacks, one definition.
+ * The item PILE. One per owner + type + location + flair: 10 arrows on you and
+ * 200 in your room are two stacks of one definition, and only one-of-a-kind
+ * types also set `definition.isNamedArtifact`.
  *
- * `isUnique` lives here: a generic iron-sword definition can have a unique,
- * story-upgraded stack without affecting other iron-sword stacks. Only truly
- * one-of-a-kind types (Frostmourne) also set `definition.isNamedArtifact`.
- *
- * `name`/`displayName` are OVERRIDES: a stack renamed by the story ("Hero Sword"
- * -> "Broken Hero Sword") sets them here and leaves the shared definition alone.
- * Resolve as `stack.displayName ?? definition.displayName`.
+ * `name`/`displayName` are overrides set by the story on this pile only; resolve
+ * with `stack.displayName ?? definition.displayName`.
  */
 export interface DossierStack {
   id: string;
@@ -90,24 +75,11 @@ export interface DossierStack {
   rarity?: string | null; // override; falls back to definition.rarity
   description?: string | null; // override; falls back to definition.description
   type: "currency" | "equipped" | "inventory" | "world"; // how it is held
-  /**
-   * Display name of the holder: the persona's name for the player's own items,
-   * a present character's name, or "world" for nobody.
-   */
+  /** Holder's display name: the persona, a present character, or "world". */
   owner: string;
-  /**
-   * Stable id when `owner` resolved at write time -- the persona id, or a
-   * present character's card id -- so matching, cleanup, and provenance work on
-   * an id instead of the agent's free-text spelling ("Gwenpool" / "gwen" /
-   * "Gwen Poole"). Null when the owner was "world" or did not resolve.
-   */
+  /** Persona or card id when the owner resolved, so matching survives the agent's spelling. */
   ownerId?: string | null;
-  /**
-   * CK3-style provenance, uniques only. Appended when the owner CHANGES (the
-   * first mint counts as the "created" event), never once per turn, so a
-   * long-held artifact does not accumulate hundreds of identical entries.
-   * Commodities and never-transferred stacks keep this empty.
-   */
+  /** Provenance, uniques only: appended on an owner change, never per turn. */
   lastOwners?: DossierOwnerEvent[];
   locationRef: DossierLocationRef; // where it physically is
   qty: number;
