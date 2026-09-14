@@ -10764,7 +10764,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 // Rewind/swipe base: cut the chat's own message array on the
                 // TARGET message -- the one this turn's snapshot is keyed to --
                 // and hand the ids strictly before it to the shared helper, which
-                // picks the newest dossier snapshot among them.
+                // picks the snapshot of the nearest ancestor, on that message's active swipe.
                 //
                 // Cutting on the target, rather than on a resolved anchor, is
                 // what makes a normal turn correct: the in-flight assistant
@@ -10779,15 +10779,38 @@ export async function generateRoutes(app: FastifyInstance) {
                 // yet means the reconciler falls back to the live row, which is
                 // correct for chats that predate this history.
                 const dossierTargetIndex = allChatMessages.findIndex((message: any) => message.id === messageId);
-                const dossierBaseIds =
+                const dossierBaseAnchors =
                   dossierTargetIndex >= 0
-                    ? allChatMessages.slice(0, dossierTargetIndex).map((message: any) => message.id)
-                    : allChatMessages.map((message: any) => message.id);
+                    ? allChatMessages
+                        .slice(0, dossierTargetIndex)
+                        .map((message: any) => ({ messageId: message.id, swipeIndex: message.activeSwipeIndex ?? 0 }))
+                    : allChatMessages.map((message: any) => ({
+                        messageId: message.id,
+                        swipeIndex: message.activeSwipeIndex ?? 0,
+                      }));
                 // Reconcile the agent's DELTAS onto the resolved base, project
                 // the dossier back into `playerStats`, and snapshot when it
                 // changed. The shared helper owns the rewind base, the
                 // prefix-aware lock predicate, and the change-gated snapshot, so
                 // every dossier writer uses one shape.
+                //
+                // Identity for this write: the shared `resolvedUserIdentity` is
+                // assigned only inside `if (userMsg?.id)`, so a swipe or
+                // regeneration -- which reuses the existing user message and
+                // creates no new one -- leaves it null, and every stack would
+                // mint to the literal "player" with no id. Resolve locally for
+                // our own call site instead of hoisting that assignment: other
+                // readers of the shared variable (prompt shaping on regeneration
+                // paths) depend on today's null behaviour there, and changing
+                // what they receive is not ours to change. `??` short-circuits,
+                // so a normal turn never pays a second resolve.
+                const dossierIdentity =
+                  resolvedUserIdentity ??
+                  (await resolveChatUserIdentity(chars, {
+                    personaId: chat.personaId,
+                    personaCharacterId: chat.personaCharacterId,
+                    mode: requestChatMode,
+                  }).catch(releaseActiveGenerationAndRethrow));
                 const projectedPlayerStats = await applyDossierUpdate({
                   db: app.db,
                   chatId: input.chatId,
@@ -10800,14 +10823,14 @@ export async function generateRoutes(app: FastifyInstance) {
                     // Persona identity travels with the rows: stacks are keyed on
                     // the persona's stable id (falling back to its name), so
                     // changing or recreating a persona keeps its items attached.
-                    personaId: resolvedUserIdentity?.id ?? null,
-                    personaName: resolvedUserIdentity?.name ?? null,
+                    personaId: dossierIdentity?.id ?? null,
+                    personaName: dossierIdentity?.name ?? null,
                   },
                   // A pinned tracker array keeps whatever the user left there; the
                   // helper applies the same prefix rule the panel writes.
                   fieldLocks: (lockState?.fieldLocks as Record<string, boolean> | null) ?? null,
                   playerStats: inventoryTrackerPatch.playerStats,
-                  baseIds: dossierBaseIds,
+                  baseAnchors: dossierBaseAnchors,
                   snapshotAnchor: { messageId, swipeIndex: targetSwipeIndex },
                 });
                 if (snap && (inventoryTrackerPatch.changed || projectedPlayerStats.changed)) {
