@@ -1,20 +1,10 @@
 // ──────────────────────────────────────────────
 // Storage: Item Dossier Snapshots
 // ──────────────────────────────────────────────
-// Per-message history of the persistent item dossier. Mirrors
-// `game-state.storage.ts` so rewind, swipe, and regeneration reuse the same
-// anchor walk: the snapshot of the nearest ancestor message, read at that
-// message's own active swipe.
-//
-// Design notes:
-// - Written only on turns where the reconciler reports a change, so chats that
-//   never touch items cost nothing.
-// - Definitions ride along with the stacks, so a rewound stack whose definition
-//   the live dossier has since dropped still renders correctly.
-// - Destroyed commodities are physically removed from the live dossier; only
-//   destroyed uniques are kept (at `qty: 0`), matching the reconciler's cleanup
-//   tail. Rewind restores either kind because every snapshot is a full copy of
-//   the dossier at that turn, not a delta.
+// Per-message history of the persistent item dossier, keyed like
+// `game_state_snapshots`: (chatId, messageId, swipeIndex), written only on turns
+// that changed it. Each row is a FULL dossier rather than a delta, so a rewind
+// restores destroyed items and keeps definitions the live dossier has dropped.
 import { and, desc, eq, inArray } from "../../db/file-query.js";
 import type { DB } from "../../db/connection.js";
 import { itemDossierSnapshots } from "../../db/schema/index.js";
@@ -36,21 +26,16 @@ export interface ItemDossierSnapshotStorage {
   /** Snapshot stored for this exact message + swipe, if any. */
   getExact(chatId: string, messageId: string, swipeIndex: number): Promise<ItemDossierSnapshotRow | null>;
   /**
-   * The merge base for a turn: the snapshot of the NEAREST ancestor message, at
-   * that message's own active swipe.
+   * The merge base for a turn: the NEAREST ancestor message that has a snapshot,
+   * at that message's own ACTIVE swipe.
    *
-   * `anchors` is the chat's message array up to the turn being generated, in
-   * chat order with the newest last. Message ORDER decides, not `createdAt`: a
-   * snapshot's clock is when the AGENT wrote it, so it can be weeks after the
-   * message it belongs to. Inactive swipes are skipped -- every swipe of one
-   * message shares a `messageId`, so without that filter the newest-written
-   * swipe would win even after the user swiped away from it, and the branch
-   * would merge onto a state it never had.
+   * `anchors` is the chat's message array up to the turn, newest last. Message
+   * ORDER decides -- a snapshot's `createdAt` is when the AGENT wrote it, and all
+   * swipes of one message share an id, so the newest-written swipe would
+   * otherwise win after the user swiped away from it.
    *
-   * Returns `null` when no ancestor has a snapshot. Callers treat that as an
-   * empty branch rather than falling back to the live dossier: the live row
-   * belongs to whichever branch ran last, so merging it in would leak items
-   * into a branch that never had them.
+   * `null` means no ancestor has one: an empty branch, never a fallback to the
+   * live row, which belongs to whichever branch ran last.
    */
   getLatestForAnchors(
     chatId: string,
@@ -124,8 +109,7 @@ export function createItemDossierSnapshotStorage(db: DB): ItemDossierSnapshotSto
             ),
           ),
         );
-      // Keep only the ACTIVE swipe of each ancestor. `saveSnapshot` upserts on
-      // (messageId, swipeIndex), so at most one row survives per message.
+      // Keep only each ancestor's ACTIVE swipe (saveSnapshot upserts per message+swipe).
       const byMessage = new Map<string, (typeof rows)[number]>();
       for (const row of rows) {
         if (activeSwipeByMessage.get(row.messageId) !== row.swipeIndex) continue;
@@ -134,9 +118,7 @@ export function createItemDossierSnapshotStorage(db: DB): ItemDossierSnapshotSto
       }
       // Nearest ancestor wins: walk the caller's own message order backwards.
       for (let index = anchors.length - 1; index >= 0; index -= 1) {
-        // `anchors[index]` reads as possibly-undefined under
-        // noUncheckedIndexedAccess because the index is a variable; the loop
-        // bound already keeps it in range, so the guard is only for the type.
+        // Guard is for noUncheckedIndexedAccess; the loop bound keeps it in range.
         const anchor = anchors[index];
         if (!anchor) continue;
         const row = byMessage.get(anchor.messageId);

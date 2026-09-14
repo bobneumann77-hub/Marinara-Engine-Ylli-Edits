@@ -1,19 +1,12 @@
 // ──────────────────────────────────────────────
 // Schema: Persistent Item Dossier Snapshots
 // ──────────────────────────────────────────────
-// Per-message snapshots of the persistent item dossier, mirroring
-// `game_state_snapshots` keying: (chatId, messageId, swipeIndex). A row is
-// written only on turns where the reconciler reports a change, so a chat
-// that never touches items costs nothing.
+// Per-message snapshots of the persistent item dossier, keyed like
+// `game_state_snapshots`: (chatId, messageId, swipeIndex), written only on turns
+// that changed it.
 //
-// Rewind and swipe cut the chat's message array on the target message and read
-// the newest snapshot among the ids strictly before it — ordering comes from the
-// message array, never from timestamps — so there is no separate rewind model
-// from game state.
-//
-// The snapshot carries definitions alongside stacks on purpose: a stack that
-// references a definition the live dossier no longer holds still renders
-// correctly after a rewind, so definitions never dangle.
+// Snapshots carry definitions alongside stacks on purpose, so a stack whose
+// definition the live dossier has since dropped still renders after a rewind.
 import { fileTable, text, integer } from "../file-schema.js";
 
 export const itemDossierSnapshots = fileTable("persistent_item_dossier_snapshots", {

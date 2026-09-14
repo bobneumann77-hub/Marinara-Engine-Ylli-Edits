@@ -19,17 +19,16 @@ import { newId, now } from "../../utils/id-generator.js";
 // ---------------------------------------------------------------------------
 
 /**
- * A single row as emitted by a producing agent (inventory tracker today; a
- * future shop / equipment / relationship agent reuses the same shape).
+ * A row as emitted by a producing agent (inventory tracker today; a shop or
+ * equipment agent reuses the shape).
  *
  * DELTA CONTRACT:
- *   - EVERY row SETS: `qty` is the pile's post-turn TOTAL, never a delta
- *   - a row with a `uuid` targets that stack; a row without one matches by
- *     canonical name + same owner + same type, and mints only when nothing matches
- *   - omitted fields are left unchanged; omission never deletes a stack
- *   - `isDestroyed` is valid on ANY row. The item is emitted wherever it
- *     currently sits; the engine then deletes it (commodity) or archives it
- *     (unique). There is no separate "destroyed" row.
+ *   - `qty` is the pile's post-turn TOTAL, never a delta
+ *   - a `uuid` targets that stack; otherwise the row matches canonical name +
+ *     owner + type, and mints only when nothing matches
+ *   - omitted fields are unchanged; omission never deletes a stack
+ *   - `isDestroyed` is valid on any row: the item is emitted where it sits and
+ *     the engine deletes it (commodity) or archives it (unique)
  */
 export interface DossierAgentRow {
   uuid?: string;
@@ -42,22 +41,16 @@ export interface DossierAgentRow {
   description?: string;
   class?: string;
   rarity?: string;
-  /**
-   * Who holds it. Omit for the persona's own items (the engine fills in the
-   * persona), or name whoever receives it. On a `world` row, an owner other
-   * than the persona means that character is carrying it, not the floor.
-   */
+  /** Omit for the persona's own items. On a `world` row, a non-persona owner means that character carries it. */
   owner?: string;
   isStolen?: boolean;
   isGifted?: boolean;
   equipmentSlot?: string;
   customFields?: Record<string, unknown>;
   /**
-   * Engine-internal. Set by the inventory adapter on rows derived from an
-   * existing `playerStats` array instead of this turn's agent output. Such rows
-   * only seed a dossier that has no stacks yet; afterwards `playerStats` is a
-   * projection of the dossier, so re-reading it would resurrect items the agent
-   * has since moved or dropped. Agents never set this field.
+   * Engine-internal: set by the inventory adapter on rows derived from
+   * `playerStats`. Such rows only seed an empty dossier -- afterwards
+   * `playerStats` is a projection, so re-reading it resurrects dropped items.
    */
   seededFromPlayerStats?: boolean;
 }
@@ -66,33 +59,22 @@ export interface DossierAgentRow {
 export interface ItemDossierReconcileContext {
   /** Turn number = count of assistant/narrator messages (see storyboardTurnNumberForMessage). */
   currentTurn?: number | null;
-  /**
-   * Current `presentCharacters`. Written by the Character Tracker agent, whose
-   * own schema says `"characterId": "string - ID or name"`, so its id is a hint
-   * rather than a stable key. Consulted after the chat's own cards below.
-   */
+  /** Written by the Character Tracker: its id is a hint, not a stable key, so the chat's own cards win. */
   presentCharacters?: Array<{ characterId?: string | null; name?: string | null }> | null;
   /**
-   * The chat's own character cards, engine-derived from `chats.characterIds`.
-   * The most stable identity source available: the id belongs to the card, not
-   * to a small model's spelling, so it is consulted BEFORE `presentCharacters`.
+   * The chat's own cards, engine-derived from `chats.characterIds`: the id
+   * belongs to the card, not a model's spelling, so they are consulted before
+   * `presentCharacters`.
    */
   chatCharacters?: Array<{
     characterId?: string | null;
     name?: string | null;
-    /**
-     * Reserved: the card's `extensions.nameAliases`. No caller populates this
-     * yet, so the alias branch in `resolveOwner` is inert -- the opening only.
-     * Filling it is what lets "Ororo" resolve to Storm's card.
-     */
+    /** Reserved: nobody fills this yet, so `resolveOwner`'s alias branch is inert. */
     nameAliases?: string[] | null;
   }> | null;
   /** Current scene location observations, when a tracker/world-maps agent supplied them. */
   currentLocation?: DossierLocationRef | null;
-  /**
-   * The active persona's display name. Player-owned stacks are keyed on it, so
-   * changing personas scopes carried items correctly. Falls back to "player".
-   */
+  /** Active persona's display name; falls back to "player". */
   personaName?: string | null;
   /** The active persona's stable id; wins over the name when both sides have one. */
   personaId?: string | null;
@@ -108,9 +90,8 @@ function canonicalName(value: unknown): string {
 }
 
 /**
- * Bounded singular/plural variants for definition matching. Deliberately NOT a
- * stemmer: a real stemmer turns "glass" -> "glas" and corrupts the definition
- * table. Only the handful of English forms the inventory model actually emits.
+ * Bounded plural variants for definition matching -- deliberately not a stemmer,
+ * which turns "glass" into "glas". Only the forms the inventory model emits.
  */
 function pluralKeyVariants(key: string): string[] {
   const out = new Set<string>([key]);
@@ -142,12 +123,9 @@ function playerIdentity(context: ItemDossierReconcileContext): { name: string; i
 }
 
 /**
- * True when a stack belongs to the active persona.
- *
- * Shared with the projection so ownership is decided in exactly one place. An
- * id on both sides wins, because that is what survives a persona rename; the
- * name (and the legacy spellings) is the fallback that lets a recreated persona
- * reclaim what it used to own, and what keeps un-migrated "player" stacks legible.
+ * True when a stack belongs to the active persona. Shared with the projection so
+ * ownership is decided in one place: an id on both sides wins, since that
+ * survives a rename; the name and legacy spellings are the fallback.
  */
 export function isPlayerOwnedStack(stack: DossierStack, context: ItemDossierReconcileContext): boolean {
   const player = playerIdentity(context);
@@ -169,13 +147,10 @@ interface ResolvedOwner {
 }
 
 /**
- * A `presentCharacters` id is usable only when it is ID-SHAPED. The Character
- * Tracker's own schema says `"characterId": "string - ID or name"`, so a
- * cardless NPC arrives as `{ characterId: "Ethan", name: "Ethan" }` -- an echo
- * of the name, not a key -- and a hallucinated short token can slip in too.
- * Real card ids are long opaque strings, so accept a value only when it differs
- * from the name and clears this floor. A rejected id costs nothing: the name
- * still matches, and adoption refreshes the id once a real card appears.
+ * A `presentCharacters` id is usable only when ID-SHAPED: a cardless NPC arrives
+ * as `{ characterId: "Ethan", name: "Ethan" }`, an echo of the name. Rejecting
+ * one costs nothing -- the name still matches, and adoption refreshes the id
+ * once a real card appears.
  */
 const MIN_CARD_ID_LENGTH = 16;
 
@@ -185,21 +160,17 @@ function isIdShaped(characterId: string | null | undefined, name: string | null 
 }
 
 /**
- * Canonicalize an agent-supplied owner string.
- *   1. "world"                     -> the world itself; nobody holds it
- *   2. omitted, or an alias        -> the persona identity
- *   3. the persona, id then name   -> the persona identity
- *   4. a chat character, id then name, then its card aliases
- *   5. a present character, id then name (ids that only echo the name rejected)
- *   6. anything else               -> the agent's own spelling, with no id
+ * Canonicalize an agent-supplied owner string:
+ *   1. "world"                      -> nobody holds it
+ *   2. omitted, or an alias         -> the persona identity
+ *   3. the persona, by id then name -> the persona identity
+ *   4. a chat character, by id then name, then its card aliases
+ *   5. a present character (ids that only echo the name are rejected)
+ *   6. anything else                -> the agent's own spelling, with no id
  *
- * Chat characters outrank `presentCharacters` on purpose. The cards are
- * engine-derived from the chat config, while the tracker agent writes the
- * `presentCharacters` array itself and may call "Storm" by the name "Ororo
- * Munroe". Stability wins, and the name fallback below still rescues a holder
- * with no card at all. Id wins when both sides have one, so renaming a persona
- * or a character keeps their stacks attached; the name is the fallback that
- * lets a recreated persona with the same name adopt what it used to own.
+ * Chat characters outrank `presentCharacters` on purpose: the cards are
+ * engine-derived, while the tracker writes `presentCharacters` itself and may
+ * call Storm "Ororo Munroe".
  */
 function resolveOwner(rawOwner: string | undefined, context: ItemDossierReconcileContext): ResolvedOwner {
   const player = playerIdentity(context);
@@ -233,8 +204,6 @@ function resolveOwner(rawOwner: string | undefined, context: ItemDossierReconcil
     return { name: (cardByName.name ?? rawOwner ?? "").trim(), id: cardByName.characterId ?? null, isPlayer: false };
   }
 
-  // Opening only: nothing fills `nameAliases` yet, so this branch is inert until
-  // a caller does. Once it is filled, "Ororo" resolves to Storm's card.
   const cardByAlias = cards.find((c) => (c.nameAliases ?? []).some((alias) => canonicalName(alias) === key));
   if (cardByAlias) {
     return {
@@ -253,18 +222,11 @@ function resolveOwner(rawOwner: string | undefined, context: ItemDossierReconcil
     };
   }
 
-  // No card anywhere: the name carries the match, and the id stays null until a
-  // real card appears for that name (adoption refreshes it then).
+  // No card anywhere: the name carries the match until a real card appears.
   return { name: (rawOwner ?? "").trim(), id: null, isPlayer: false };
 }
 
-/**
- * Adopt the current persona's identity for stacks it already owns.
- *
- * Runs before rows are matched, so renaming a persona keeps its items, and so a
- * persona recreated under the same name reclaims the stacks an older id left
- * behind. Legacy "player" spellings migrate here too.
- */
+/** Adopt the persona's identity for stacks it owns; runs before matching, so a rename keeps its items. */
 function adoptPersonaIdentity(dossier: PersistentItemDossier, context: ItemDossierReconcileContext): void {
   const player = playerIdentity(context);
   const nameKey = canonicalName(player.name);
@@ -287,10 +249,8 @@ function findStack(
     const byId = dossier.stacks.find((s) => s.id === row.uuid);
     if (byId) return byId;
   }
-  // The fallback is scoped to the SAME owner and type, so a hallucinated uuid on
-  // a carried potion can never grab the bedroom pile. The owner matches on the
-  // stable id when both sides have one, and on the canonical name otherwise --
-  // which is what lets a recreated persona reclaim its stacks.
+  // Scoped to the same owner and type, so a hallucinated uuid on a carried potion
+  // cannot grab the bedroom pile.
   const key = canonicalName(row.name);
   const ownerKey = canonicalName(row.owner);
   const type = row.type ?? "inventory";
@@ -299,10 +259,9 @@ function findStack(
     s.type === type &&
     ((ownerId !== null && s.ownerId === ownerId) || canonicalName(s.owner) === ownerKey);
 
-  // A stated flair identifies ONE instance: two "potion" piles, one poisoned and
-  // one not, must not collapse onto whichever comes first. Rows that state no
-  // flair fall through to the name-only match below, so an item described from a
-  // context-free prompt still lands on its existing pile instead of minting a twin.
+  // A stated flair identifies ONE instance, so two "potion" piles (one poisoned)
+  // stop collapsing onto the first. Rows with no flair fall through to the
+  // name-only match.
   const flairKey = canonicalName(row.flair ?? "");
   if (flairKey) {
     const byFlair = dossier.stacks.find((s) => scoped(s) && canonicalName(s.flair ?? "") === flairKey);
@@ -318,10 +277,9 @@ function findDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): D
 }
 
 /**
- * Mint a definition from a row. `isNamedArtifact` is set ONLY here, and ONLY
- * when a row arrives with no uuid AND `isUnique: true` -- the item is *born*
- * one-of-a-kind. An update can never mint a definition, so a rename can never
- * create a new template.
+ * Mint a definition. `isNamedArtifact` is set only here, and only for a row with
+ * no uuid and `isUnique: true`: an update can never mint a definition, so a
+ * rename never creates a new template.
  */
 function mintDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): DossierDefinition {
   const ts = now();
@@ -341,13 +299,7 @@ function mintDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): D
   return definition;
 }
 
-/**
- * Where a row's stack physically is.
- *   - carried groups (currency / equipped / inventory) -> `on_person`
- *   - `world` -> the current scene's observations, when the caller supplied them
- * Observations merge per source and never clear each other; recency (`at`)
- * alone decides which one wins at read time.
- */
+/** Carried groups become `on_person`; `world` rows take the scene's observations. */
 function stampLocation(
   target: DossierLocationRef,
   row: DossierAgentRow,
@@ -398,13 +350,9 @@ function mintStack(
 }
 
 /**
- * Content fields a tracker row can actually move.
- *
- * Used by `applyRowUpdate` to decide whether `updatedAt` should advance. The
- * deliberate omissions are `updatedAt` itself, `lastSeenTurn` (a turn stamp)
- * and `lastOwners` (provenance history): none of them describe the item's
- * current state, so a row that merely restates a settled item leaves this
- * snapshot unchanged and no redundant dossier snapshot gets written.
+ * Fields a row can actually move, compared to decide whether `updatedAt`
+ * advances. `updatedAt`, `lastSeenTurn` and `lastOwners` are omitted on purpose:
+ * they track the turn, not the item.
  */
 function stackContentFields(stack: DossierStack): Record<string, unknown> {
   return {
@@ -437,10 +385,7 @@ function applyRowUpdate(
   owner: ResolvedOwner,
 ): void {
   const ts = now();
-  // Capture the content fields before mutating, so `updatedAt` only advances on
-  // a real change. A row that merely restates a settled item must leave the
-  // stack identical -- otherwise every turn looks dirty once the change-detection
-  // baseline is a real before-state, and each turn writes a redundant snapshot.
+  // Captured before mutating, so `updatedAt` only advances on a real change.
   const contentBefore = stackContentFields(stack);
 
   // Owner change -> provenance. Only uniques keep a history worth reading.
@@ -462,8 +407,8 @@ function applyRowUpdate(
     stack.ownerId = owner.id;
   }
 
-  // A name that differs from the definition is a STACK OVERRIDE, never a new
-  // definition. "Hero Sword" -> "Broken Hero Sword" updates this pile only.
+  // A name differing from the definition is a STACK OVERRIDE, never a new
+  // definition.
   const definition = dossier.definitions.find((d) => d.id === stack.definitionId);
   const rowKey = canonicalName(row.name);
   if (rowKey && rowKey !== canonicalName(definition?.name)) {
@@ -473,8 +418,7 @@ function applyRowUpdate(
 
   if (row.type !== undefined) stack.type = row.type;
   if (row.qty !== undefined) {
-    // Every row states the pile's post-turn TOTAL (never a delta). Uniques are
-    // clamped to 1 and are only ever destroyed by an explicit isDestroyed flag.
+    // Post-turn TOTAL, never a delta. Uniques clamp to 1 and need isDestroyed.
     stack.qty = stack.isUnique ? 1 : Math.max(0, Math.floor(row.qty));
   }
   if (row.flair !== undefined) stack.flair = row.flair || null;
@@ -495,21 +439,15 @@ function applyRowUpdate(
 
   stack.locationRef = stampLocation(stack.locationRef ?? {}, row, context);
   if (context.currentTurn != null) stack.lastSeenTurn = context.currentTurn;
-  // Only advance `updatedAt` when the row actually changed content. Turn stamps
-  // (`lastSeenTurn`) and provenance history (`lastOwners`) deliberately do not
-  // count: they track the turn, not the item's state.
   if (!isDeepStrictEqual(contentBefore, stackContentFields(stack))) {
     stack.updatedAt = ts;
   }
 }
 
 /**
- * Merge identity for a stack's location.
- *
- * `at` moves every turn, so it is never part of the key. A carried stack is its
- * own bucket; otherwise the World Maps id is the hard pointer and the World
- * State name the fallback. A stack with no observation at all keys empty and
- * stays mergeable, which is the fail-open rule the read side uses for thin rows.
+ * Merge identity for a stack's location: `on_person`, else the World Maps id,
+ * else the World State name. `at` is excluded -- it moves every turn, so a pile
+ * would split the moment a turn passed.
  */
 function stackLocationKey(stack: DossierStack): string {
   const ref = stack.locationRef ?? {};
@@ -520,13 +458,9 @@ function stackLocationKey(stack: DossierStack): string {
 }
 
 /**
- * Collapse same-scope duplicate stacks the model split by accident.
- * Two stacks merge only when definition + owner + type + normalized flair +
- * LOCATION all match AND neither is unique (a unique is a singleton).
- *
- * Location belongs in the key because it is part of the pile's identity: 10
- * arrows on you and 200 in your room are two piles, and summing them would
- * invent 210 arrows on your person.
+ * Collapse duplicates the model split by accident. Definition, owner, type,
+ * flair and LOCATION must all match and neither side may be unique: 10 arrows on
+ * you and 200 in your room are two piles, and summing them invents 210 on you.
  */
 function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
   const kept: DossierStack[] = [];
@@ -546,8 +480,7 @@ function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
         stackLocationKey(k) === locationKey,
     );
     if (twin) {
-      // Not row math: these stacks are already separate in the dossier and
-      // indistinguishable, so the true total was split by a bug -- reconstruct it.
+      // The true total was split by a bug, so reconstruct it.
       twin.qty += stack.qty;
       twin.updatedAt = stack.updatedAt;
       if ((stack.lastSeenTurn ?? 0) > (twin.lastSeenTurn ?? 0)) {
@@ -561,14 +494,9 @@ function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
 }
 
 /**
- * Cleanup tail.
- *   - destroyed COMMODITY -> deleted outright; nothing about a potion is worth
- *     provenance
- *   - destroyed UNIQUE -> kept, flagged, qty 0; the shattering of *that* sword
- *     is a story fact
- *   - `qty: 0` on a commodity counts as emptied (belt and braces for a model
- *     that forgets the flag)
- *   - definitions are NEVER deleted; they are permanent vocabulary
+ * A destroyed commodity is deleted outright; a destroyed unique is kept at
+ * `qty: 0`, because the shattering of *that* sword is a story fact. `qty: 0` on
+ * a commodity also counts as emptied, for a model that forgets the flag.
  */
 function deleteDestroyedCommodities(dossier: PersistentItemDossier): void {
   dossier.stacks = dossier.stacks.filter((stack) => {
@@ -587,42 +515,17 @@ function deleteDestroyedCommodities(dossier: PersistentItemDossier): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Reconcile one agent's rows against the per-chat dossier.
- *
- * Identity rules (in order):
- *   1. exact `uuid` match                      -> update that stack
- *   2. canonical name + same owner + same type -> update that stack
- *   3. no match                                -> mint definition (by name) + stack
- *
- * Owner rules:
- *   - the persona's own items carry the persona's name and id, never "player"
- *   - owners resolve against the chat's own cards first, then `presentCharacters`
- *     (the tracker agent writes that array itself, so its id is a hint)
- *   - a `world` row owned by anyone but the persona is retyped to `inventory`,
- *     because that means the character is holding it, not the floor
- *   - rows derived from existing `playerStats` seed an EMPTY dossier only
- *
- * Field rules:
- *   - every row SETS: `qty` is the pile's post-turn TOTAL, never a delta
- *   - omitted fields are left unchanged; omission never deletes a stack
- *   - an update can never mint a definition, so a rename only sets the stack's
- *     name/displayName override
- *   - host-owned fields (id, definitionId, locationRef, createdAt, lastSeenTurn,
- *     ownerId, lastOwners) are never taken from model output
+ * Reconcile one agent's rows against the per-chat dossier: exact `uuid` match,
+ * else canonical name + owner + type, else mint definition + stack. Host-owned
+ * fields (id, definitionId, locationRef, createdAt, lastSeenTurn, ownerId,
+ * lastOwners) never come from model output.
  */
 export async function reconcileItemDossier(
   storage: PersistentItemDossierStorage,
   chatId: string,
   rows: DossierAgentRow[],
   context: ItemDossierReconcileContext = {},
-  /**
-   * Optional merge base for rewind and swipe. When provided, the reconciler
-   * merges onto this dossier instead of reading the live row, so an agent
-   * turn after a rewind continues from the state at the anchor message rather
-   * than from the newest branch. Pass `undefined` (or omit) to keep the live
-   * row as the base -- the pre-snapshot behaviour, retained so pre-upgrade
-   * chats that never accumulated snapshot history keep working.
-   */
+  /** `null` starts empty; `undefined` keeps the live row (chats with no snapshot history). */
   base?: PersistentItemDossier | null,
 ): Promise<PersistentItemDossier> {
   const loaded = base !== undefined ? base : await storage.getForChat(chatId);
@@ -631,9 +534,8 @@ export async function reconcileItemDossier(
     definitions: [],
     stacks: [],
   };
-  // Seed rows are only meaningful while the dossier is empty: after that,
-  // `playerStats` is a projection of the dossier and re-applying it would
-  // resurrect items the agent has since moved or dropped.
+  // Seed rows only matter while the dossier is empty; afterwards `playerStats`
+  // is a projection, so re-applying would resurrect moved or dropped items.
   const isFirstRun = dossier.definitions.length === 0 && dossier.stacks.length === 0;
 
   adoptPersonaIdentity(dossier, context);
@@ -660,9 +562,8 @@ export async function reconcileItemDossier(
     const definition = matchedDefinition ?? mintDefinition(dossier, row);
     const stack = mintStack(definition, row, context, owner);
     if (matchedDefinition) {
-      // A matched definition is shared vocabulary, so the row's metadata is an
-      // INSTANCE claim and becomes a stack override instead of rewriting the
-      // template every other item of that kind reads from.
+      // A matched definition is shared vocabulary: the row's metadata is an
+      // instance claim, a stack override, not a rewrite of the template.
       if (row.class !== undefined && row.class !== matchedDefinition.class) stack.class = row.class;
       if (row.rarity !== undefined && row.rarity !== matchedDefinition.rarity) stack.rarity = row.rarity;
       if (row.description !== undefined && row.description !== matchedDefinition.description) {
@@ -705,22 +606,18 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 /**
- * De-duplication key for rows on their way out of the adapter. Owner and flair
- * belong in it: two daggers of the same name held by different characters, or
- * in different conditions, are different stacks and must both survive.
+ * De-dup key for adapter rows: the same name held by different characters, or
+ * in different condition, must survive as two stacks.
  */
 function dossierRowKey(type: string, name: string, owner: string | undefined, flair: string | undefined): string {
   return `${type}:${canonicalName(owner)}:${canonicalName(name)}:${canonicalName(flair)}`;
 }
 
 /**
- * Seed rows from an existing `playerStats`.
- *
- * Used once, when a chat gains a dossier it never had: every item the persona
- * already carries gets a stack and a stable identity. Marked so the reconciler
- * ignores them afterwards, because `playerStats` becomes a projection of the
- * dossier and re-reading it would resurrect items the agent has since moved or
- * dropped.
+ * Seed rows from an existing `playerStats`, used once when a chat gains a
+ * dossier it never had. Marked so the reconciler ignores them afterwards:
+ * `playerStats` becomes a projection, so re-reading it would resurrect items
+ * the agent has since moved or dropped.
  */
 export function buildSeedRowsFromPlayerStats(
   mergedPlayerStats: Record<string, unknown> | null | undefined,
@@ -746,13 +643,10 @@ export function buildSeedRowsFromPlayerStats(
 }
 
 /**
- * Adapter: the inventory tracker's shape -> shared dossier rows.
- *
- * `rawData` is the agent's own JSON, BEFORE normalization, so rich fields
- * (uuid, description, class, rarity, owner, isUnique, isDestroyed, flair)
- * survive. `mergedPlayerStats` contributes SEED rows only, and only for items no
- * agent row already describes; the reconciler applies them exactly once.
- * The `world` bucket is delta-only and is never carried forward.
+ * Adapter: the inventory tracker's shape -> shared dossier rows. `rawData` is
+ * the agent's own JSON BEFORE normalization, so its rich fields survive;
+ * `mergedPlayerStats` contributes seed rows only, for items no agent row already
+ * describes. The `world` bucket is delta-only and never carried forward.
  */
 export function buildDossierRowsFromInventoryTracker({
   rawData,
