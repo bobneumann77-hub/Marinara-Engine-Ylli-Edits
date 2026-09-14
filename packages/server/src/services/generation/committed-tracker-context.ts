@@ -149,7 +149,14 @@ function formatQuestLine(quest: any): string | null {
  * order. These are the stack fields the projection writes, minus `uuid` (engine
  * plumbing the model has no use for) and `qty`/`name` (always rendered).
  */
-export const INVENTORY_TRACKER_RENDER_FIELDS = ["flair", "rarity", "description", "class", "location", "isUnique"] as const;
+export const INVENTORY_TRACKER_RENDER_FIELDS = [
+  "flair",
+  "rarity",
+  "description",
+  "class",
+  "location",
+  "isUnique",
+] as const;
 export type InventoryTrackerRenderField = (typeof INVENTORY_TRACKER_RENDER_FIELDS)[number];
 
 /**
