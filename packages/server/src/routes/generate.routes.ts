@@ -138,7 +138,7 @@ import { createCustomStickersStorage } from "../services/storage/custom-stickers
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
-import { applyDossierUpdate } from "../services/storage/persistent-item-dossier.apply.js";
+import { applyDossierUpdate, buildDossierBaseAnchors } from "../services/storage/persistent-item-dossier.apply.js";
 import { buildDossierRowsFromInventoryTracker } from "../services/storage/persistent-item-dossier.reconciler.js";
 import { getCustomAgentImportPolicy } from "../services/agents/custom-agent-import-policy.service.js";
 import { buildLorebookSemanticEmbeddingsById, warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
@@ -10752,58 +10752,15 @@ export async function generateRoutes(app: FastifyInstance) {
                   rawData: result.data as Record<string, unknown>,
                   mergedPlayerStats: inventoryTrackerPatch.playerStats,
                 });
-                // The chat's own cards are the stable half of owner resolution:
-                // engine-derived ids, consulted before the tracker's
-                // presentCharacters, which is a small model's transcription and
-                // may spell a card's name differently.
-                const chatCharacterIds = parseJsonField<string[]>(chat.characterIds, []);
-                const chatCharacterNameById = await resolveCharacterNameMap(chatCharacterIds, (id) =>
-                  chars.getById(id),
-                );
-                const chatCharacters = [...chatCharacterNameById].map(([characterId, name]) => ({ characterId, name }));
-                // Rewind/swipe base: cut the chat's own message array on the
-                // TARGET message -- the one this turn's snapshot is keyed to --
-                // and hand the ids strictly before it to the shared helper, which
-                // picks the snapshot of the nearest ancestor, on that message's active swipe.
-                //
-                // Cutting on the target, rather than on a resolved anchor, is
-                // what makes a normal turn correct: the in-flight assistant
-                // message is not in this pre-generation array, so the cut falls
-                // through to every loaded id -- which still includes the PREVIOUS
-                // turn's message, so the base is the state right after the last
-                // completed turn. On a regeneration or swipe the target IS in the
-                // array, so the cut excludes it and the base is the state before
-                // that message. Order comes from the message array, not
-                // timestamps: a snapshot's `createdAt` is when the AGENT wrote it
-                // and can be weeks after the message it belongs to. No snapshot
-                // yet means the reconciler falls back to the live row, which is
-                // correct for chats that predate this history.
-                const dossierTargetIndex = allChatMessages.findIndex((message: any) => message.id === messageId);
-                const dossierBaseAnchors =
-                  dossierTargetIndex >= 0
-                    ? allChatMessages
-                        .slice(0, dossierTargetIndex)
-                        .map((message: any) => ({ messageId: message.id, swipeIndex: message.activeSwipeIndex ?? 0 }))
-                    : allChatMessages.map((message: any) => ({
-                        messageId: message.id,
-                        swipeIndex: message.activeSwipeIndex ?? 0,
-                      }));
-                // Reconcile the agent's DELTAS onto the resolved base, project
-                // the dossier back into `playerStats`, and snapshot when it
-                // changed. The shared helper owns the rewind base, the
-                // prefix-aware lock predicate, and the change-gated snapshot, so
-                // every dossier writer uses one shape.
-                //
-                // Identity for this write: the shared `resolvedUserIdentity` is
-                // assigned only inside `if (userMsg?.id)`, so a swipe or
-                // regeneration -- which reuses the existing user message and
-                // creates no new one -- leaves it null, and every stack would
-                // mint to the literal "player" with no id. Resolve locally for
-                // our own call site instead of hoisting that assignment: other
-                // readers of the shared variable (prompt shaping on regeneration
-                // paths) depend on today's null behaviour there, and changing
-                // what they receive is not ours to change. `??` short-circuits,
-                // so a normal turn never pays a second resolve.
+                // Rewind base: every message before this turn, at its active
+                // swipe. The walk's semantics live with `buildDossierBaseAnchors`.
+                const dossierBaseAnchors = buildDossierBaseAnchors(allChatMessages, messageId);
+                // Identity for this write: `resolvedUserIdentity` is assigned only
+                // inside `if (userMsg?.id)`, and a swipe or regeneration reuses the
+                // user message, so it stays null and every stack would mint to the
+                // literal "player". Resolve locally instead of hoisting that
+                // assignment -- other readers depend on today's null there. `??`
+                // short-circuits, so a normal turn pays nothing.
                 const dossierIdentity =
                   resolvedUserIdentity ??
                   (await resolveChatUserIdentity(chars, {
@@ -10819,15 +10776,12 @@ export async function generateRoutes(app: FastifyInstance) {
                     presentCharacters: snap
                       ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters
                       : null,
-                    chatCharacters,
-                    // Persona identity travels with the rows: stacks are keyed on
-                    // the persona's stable id (falling back to its name), so
-                    // changing or recreating a persona keeps its items attached.
+                    // Persona identity travels with the rows, so a stack survives a
+                    // persona change: keyed on the stable id, falling back to the name.
                     personaId: dossierIdentity?.id ?? null,
                     personaName: dossierIdentity?.name ?? null,
                   },
-                  // A pinned tracker array keeps whatever the user left there; the
-                  // helper applies the same prefix rule the panel writes.
+                  // A pinned tracker array keeps whatever the user left there.
                   fieldLocks: (lockState?.fieldLocks as Record<string, boolean> | null) ?? null,
                   playerStats: inventoryTrackerPatch.playerStats,
                   baseAnchors: dossierBaseAnchors,

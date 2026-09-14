@@ -294,12 +294,21 @@ function findStack(
   const key = canonicalName(row.name);
   const ownerKey = canonicalName(row.owner);
   const type = row.type ?? "inventory";
-  return dossier.stacks.find(
-    (s) =>
-      canonicalName(resolvedStackName(s, dossier)) === key &&
-      s.type === type &&
-      ((ownerId !== null && s.ownerId === ownerId) || canonicalName(s.owner) === ownerKey),
-  );
+  const scoped = (s: DossierStack) =>
+    canonicalName(resolvedStackName(s, dossier)) === key &&
+    s.type === type &&
+    ((ownerId !== null && s.ownerId === ownerId) || canonicalName(s.owner) === ownerKey);
+
+  // A stated flair identifies ONE instance: two "potion" piles, one poisoned and
+  // one not, must not collapse onto whichever comes first. Rows that state no
+  // flair fall through to the name-only match below, so an item described from a
+  // context-free prompt still lands on its existing pile instead of minting a twin.
+  const flairKey = canonicalName(row.flair ?? "");
+  if (flairKey) {
+    const byFlair = dossier.stacks.find((s) => scoped(s) && canonicalName(s.flair ?? "") === flairKey);
+    if (byFlair) return byFlair;
+  }
+  return dossier.stacks.find(scoped);
 }
 
 /** Find the definition a row's name belongs to, with a bounded plural allowance. */
@@ -379,6 +388,8 @@ function mintStack(
     flair: row.flair ?? null,
     isUnique,
     isDestroyed: row.isDestroyed === true,
+    isStolen: row.isStolen === true,
+    isGifted: row.isGifted === true,
     isStored: false,
     lastSeenTurn: context.currentTurn ?? null,
     createdAt: ts,
@@ -410,6 +421,8 @@ function stackContentFields(stack: DossierStack): Record<string, unknown> {
     equipmentSlot: stack.equipmentSlot,
     isUnique: stack.isUnique,
     isDestroyed: stack.isDestroyed,
+    isStolen: stack.isStolen ?? false,
+    isGifted: stack.isGifted ?? false,
     customFields: stack.customFields ?? null,
     locationRef: stack.locationRef ?? null,
   };
@@ -474,6 +487,8 @@ function applyRowUpdate(
     if (row.isUnique) stack.qty = 1;
   }
   if (row.isDestroyed === true) stack.isDestroyed = true;
+  if (row.isStolen !== undefined) stack.isStolen = row.isStolen;
+  if (row.isGifted !== undefined) stack.isGifted = row.isGifted;
   if (row.customFields !== undefined) {
     stack.customFields = { ...(stack.customFields ?? {}), ...row.customFields };
   }
@@ -489,9 +504,29 @@ function applyRowUpdate(
 }
 
 /**
+ * Merge identity for a stack's location.
+ *
+ * `at` moves every turn, so it is never part of the key. A carried stack is its
+ * own bucket; otherwise the World Maps id is the hard pointer and the World
+ * State name the fallback. A stack with no observation at all keys empty and
+ * stays mergeable, which is the fail-open rule the read side uses for thin rows.
+ */
+function stackLocationKey(stack: DossierStack): string {
+  const ref = stack.locationRef ?? {};
+  if (ref.on_person) return "on_person";
+  if (ref.map?.id) return `map:${ref.map.id}`;
+  const worldName = canonicalName(ref.world?.name ?? "");
+  return worldName ? `world:${worldName}` : "";
+}
+
+/**
  * Collapse same-scope duplicate stacks the model split by accident.
- * Two stacks merge only when definition + owner + type + normalized flair all
- * match AND neither is unique (a unique is a singleton by definition).
+ * Two stacks merge only when definition + owner + type + normalized flair +
+ * LOCATION all match AND neither is unique (a unique is a singleton).
+ *
+ * Location belongs in the key because it is part of the pile's identity: 10
+ * arrows on you and 200 in your room are two piles, and summing them would
+ * invent 210 arrows on your person.
  */
 function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
   const kept: DossierStack[] = [];
@@ -500,13 +535,15 @@ function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
       kept.push(stack);
       continue;
     }
+    const locationKey = stackLocationKey(stack);
     const twin = kept.find(
       (k) =>
         !k.isUnique &&
         k.definitionId === stack.definitionId &&
         canonicalName(k.owner) === canonicalName(stack.owner) &&
         k.type === stack.type &&
-        canonicalName(k.flair ?? "") === canonicalName(stack.flair ?? ""),
+        canonicalName(k.flair ?? "") === canonicalName(stack.flair ?? "") &&
+        stackLocationKey(k) === locationKey,
     );
     if (twin) {
       // Not row math: these stacks are already separate in the dossier and

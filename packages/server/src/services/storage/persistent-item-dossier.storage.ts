@@ -114,6 +114,9 @@ export interface DossierStack {
   flair?: string | null; // "poisoned", "wrapped in oilcloth"
   isUnique: boolean;
   isDestroyed: boolean;
+  /** Acquisition flavour for the panel and journal. Never affects matching. */
+  isStolen?: boolean;
+  isGifted?: boolean;
   isStored?: boolean;
   /** Free-form per-instance metadata (an escape hatch for future agents). */
   customFields?: Record<string, unknown> | null;

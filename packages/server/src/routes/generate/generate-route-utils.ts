@@ -918,31 +918,10 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function readCharacterName(data: unknown): string | null {
-  try {
-    const parsed = typeof data === "string" ? JSON.parse(data) : data;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const name = (parsed as { name?: unknown }).name;
-    return typeof name === "string" && name.trim() ? name.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function resolveCharacterNameMap(
-  characterIds: string[],
-  getCharacterById: (id: string) => Promise<{ data?: unknown } | null | undefined>,
-): Promise<Map<string, string>> {
-  const entries = await Promise.all(
-    characterIds.map(async (id) => {
-      const row = await getCharacterById(id);
-      const name = readCharacterName(row?.data);
-      return name ? ([id, name] as const) : null;
-    }),
-  );
-
-  return new Map(entries.filter((entry): entry is readonly [string, string] => !!entry));
-}
+// Moved to services/storage/character-name-map.ts so services can resolve
+// owner context without importing a route module. Re-exported so the existing
+// callers here and in dry-run-route.ts keep importing it from this file.
+export { resolveCharacterNameMap } from "../../services/storage/character-name-map.js";
 
 function prefixSpeakerName(content: string, speakerName: string): string {
   const speaker = speakerName.trim();
