@@ -277,7 +277,7 @@ import {
   type SpotifyRuntimeAgent,
 } from "../../services/generation/spotify-agent-runtime.js";
 import { buildDossierRowsFromInventoryTracker } from "../../services/storage/persistent-item-dossier.reconciler.js";
-import { applyDossierUpdate } from "../../services/storage/persistent-item-dossier.apply.js";
+import { applyDossierUpdate, buildDossierBaseAnchors } from "../../services/storage/persistent-item-dossier.apply.js";
 
 type PersonaContext = {
   // Persona-store ID only. A character-backed user identity keeps this null so
@@ -3396,39 +3396,20 @@ async function applyRetryResultEffects(args: {
           const persona = args.agentContext.memory._personaId;
           return typeof persona === "string" && persona ? persona : null;
         })();
-        // `chatCharacters` carries every card attached to the chat (id + name),
-        // which is the stable half of owner resolution; `presentCharacters` is a
-        // small model's transcription and is consulted second.
-        const retryChatCharacters = (args.agentContext.chatCharacters ?? []).map((character) => ({
-          characterId: character.id,
-          name: character.name,
-        }));
-        // Reconcile, then project the dossier back into playerStats. The agent
-        // emits DELTAS while the patch builder replaces whole groups, so without
-        // the projection the model would see one changed potion as its entire
-        // inventory while the dossier still holds the rest.
+        // Reconcile, then project the dossier back into playerStats: the agent emits
+        // DELTAS while the patch builder replaces whole groups, so the model would
+        // otherwise see one changed potion as its entire inventory.
         const retryLockState = snap ? parseGameStateRow(snap as Record<string, unknown>) : null;
-        // Walk the chat's message array back from the retry target to collect
-        // the ids strictly BEFORE it; the shared helper turns that into the
-        // rewind base and snapshots this turn when the dossier changed.
         const retryAllMessages = await chats.listMessages(chatId);
         assertRetryActive();
-        const retryAnchorIndex = retryAllMessages.findIndex((message: any) => message.id === retryMessageId);
-        // Each ancestor travels with its ACTIVE swipe: every swipe of one message
-        // shares a messageId, so the base walk has to know which branch is live.
-        const retryBaseAnchors = (retryAnchorIndex > 0 ? retryAllMessages.slice(0, retryAnchorIndex) : []).map(
-          (message: any) => ({
-            messageId: message.id as string,
-            swipeIndex: (message.activeSwipeIndex as number | undefined) ?? 0,
-          }),
-        );
+        // Rewind base: every message before the retry target, at its active swipe.
+        const retryBaseAnchors = buildDossierBaseAnchors(retryAllMessages, retryMessageId);
         const dossierProjection = await applyDossierUpdate({
           db: args.app.db,
           chatId,
           rows: dossierRows,
           context: {
             presentCharacters: retryLockState?.presentCharacters ?? null,
-            chatCharacters: retryChatCharacters,
             personaId: retryPersonaOwnerId,
             personaName: args.agentContext.persona?.name ?? null,
           },
