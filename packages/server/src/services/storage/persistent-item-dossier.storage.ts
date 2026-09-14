@@ -89,6 +89,11 @@ export interface DossierStack {
   /** Acquisition flavour for the panel and journal. Never affects matching. */
   isStolen?: boolean;
   isGifted?: boolean;
+  /**
+   * Stowed in a container rather than dropped in the world, so the lastSeenTurn
+   * cleanup spares it. Always false until currentTurn wiring and the agent's flag
+   * land; add it to stackContentFields then, or a change will not register.
+   */
   isStored?: boolean;
   /** Free-form per-instance metadata (an escape hatch for future agents). */
   customFields?: Record<string, unknown> | null;
