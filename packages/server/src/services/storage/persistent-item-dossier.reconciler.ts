@@ -286,11 +286,7 @@ function findStack(
  * tiers. Destroyed stacks are never re-matched, and an unmatched entry is
  * dropped silently -- a removal must never mint.
  */
-function destroyRemovedStack(
-  dossier: PersistentItemDossier,
-  row: DossierAgentRow,
-  ownerId: string | null,
-): void {
+function destroyRemovedStack(dossier: PersistentItemDossier, row: DossierAgentRow, ownerId: string | null): void {
   let target: DossierStack | undefined;
   if (row.uuid) target = dossier.stacks.find((s) => s.id === row.uuid && !s.isDestroyed);
   if (!target && canonicalName(row.name)) target = findStack(dossier, row, ownerId);
@@ -550,6 +546,31 @@ function deleteDestroyedCommodities(dossier: PersistentItemDossier): void {
   });
 }
 
+/**
+ * A uuid cited into a DIFFERENT group with a strictly smaller qty is a partial
+ * move: take that much off the source and mint it in the target group. Each
+ * exclusion protects an ordinary case -- a smaller qty in the pile's own group
+ * is a plain total (drinking one of three potions), a qty at or above the pile
+ * moves it whole (full take, gift, equip), and a qty-less row is an equip that
+ * must stay one action. Uniques never split: a one-of-a-kind is a whole thing.
+ *
+ * `statedType` is the group the agent WROTE the row in, which for a hand-off is
+ * not what the row ends up carried as. Without it a partial gift would read as a
+ * same-group total and shrink the giver's pile.
+ */
+function isPartialMove(
+  stack: DossierStack,
+  row: DossierAgentRow,
+  statedType: DossierStack["type"] | undefined,
+): boolean {
+  if (!row.uuid || row.qty === undefined || !Number.isFinite(row.qty)) return false;
+  if (row.isDestroyed === true) return false;
+  if (statedType === undefined || statedType === stack.type) return false;
+  if (stack.isUnique || stack.isDestroyed) return false;
+  const taken = Math.floor(row.qty);
+  return taken >= 1 && taken < stack.qty;
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -580,6 +601,15 @@ export async function reconcileItemDossier(
 
   adoptPersonaIdentity(dossier, context);
 
+  // How often each uuid is stated this turn. More than once means the agent
+  // wrote the source's own new total as well, so a split must not subtract from
+  // it a second time.
+  const qtyStatements = new Map<string, number>();
+  for (const raw of rows) {
+    if (!raw.uuid || raw.qty === undefined || raw.removal) continue;
+    qtyStatements.set(raw.uuid, (qtyStatements.get(raw.uuid) ?? 0) + 1);
+  }
+
   for (const raw of rows) {
     if (!canonicalName(raw.name)) continue;
     if (raw.seededFromPlayerStats && !isFirstRun) continue;
@@ -592,6 +622,10 @@ export async function reconcileItemDossier(
 
     const owner = resolveOwner(raw.owner, context);
     const row: DossierAgentRow = { ...raw, owner: owner.name };
+    // The group the agent WROTE it in, captured before the hand-off flip below.
+    // The partial-move test needs that intent, not the group the item is
+    // carried in afterwards.
+    const statedType = row.type;
     // A `world` row owned by someone other than the persona means that person is
     // HOLDING it, not that it lies on the floor, so it travels with them.
     if (row.type === "world" && !owner.isPlayer && canonicalName(owner.name) !== "world") {
@@ -600,6 +634,30 @@ export async function reconcileItemDossier(
 
     const existing = findStack(dossier, row, owner.id);
     if (existing) {
+      if (isPartialMove(existing, row, statedType)) {
+        const taken = Math.max(1, Math.floor(row.qty as number));
+        // The split-off pile is a NEW pile: fresh identity, no inherited
+        // provenance, and no inherited descriptor. applyRowUpdate fills it from
+        // the row, owner and location included.
+        const split: DossierStack = {
+          ...structuredClone(existing),
+          id: newId(),
+          lastOwners: [],
+          locationRef: {},
+          locationText: null,
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        applyRowUpdate(dossier, split, row, context, owner);
+        dossier.stacks.push(split);
+        // The source keeps its own total when the agent already stated it.
+        if ((qtyStatements.get(existing.id) ?? 0) < 2) {
+          existing.qty = Math.max(1, existing.qty - taken);
+          existing.updatedAt = now();
+        }
+        if (context.currentTurn != null) existing.lastSeenTurn = context.currentTurn;
+        continue;
+      }
       applyRowUpdate(dossier, existing, row, context, owner);
       continue;
     }
