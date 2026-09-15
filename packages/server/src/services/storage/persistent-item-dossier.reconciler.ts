@@ -596,7 +596,9 @@ export async function reconcileItemDossier(
     stacks: [],
   };
   // Seed rows only matter while the dossier is empty; afterwards `playerStats`
-  // is a projection, so re-applying would resurrect moved or dropped items.
+  // is a projection, so re-applying would resurrect moved or dropped items. The
+  // caller also withholds them on a rewind, where an empty base is a branch, not
+  // a chat that never had a dossier.
   const isFirstRun = dossier.definitions.length === 0 && dossier.stacks.length === 0;
 
   adoptPersonaIdentity(dossier, context);
@@ -611,7 +613,6 @@ export async function reconcileItemDossier(
   }
 
   for (const raw of rows) {
-    if (!canonicalName(raw.name)) continue;
     if (raw.seededFromPlayerStats && !isFirstRun) continue;
     // Removals are match-only and never mint, so they run before the name gate:
     // a `removed` entry may carry only a uuid.
@@ -619,6 +620,9 @@ export async function reconcileItemDossier(
       destroyRemovedStack(dossier, raw, resolveOwner(raw.owner, context).id);
       continue;
     }
+    // A uuid-only row (a partial move, per the prompt's chest example) is legal:
+    // findStack resolves it by id, so it must not die at the name gate.
+    if (!canonicalName(raw.name) && !raw.uuid) continue;
 
     const owner = resolveOwner(raw.owner, context);
     const row: DossierAgentRow = { ...raw, owner: owner.name };
@@ -721,7 +725,10 @@ function dossierRowKey(type: string, name: string, owner: string | undefined, fl
  * Seed rows from an existing `playerStats`, used once when a chat gains a
  * dossier it never had. Marked so the reconciler ignores them afterwards:
  * `playerStats` becomes a projection, so re-reading it would resurrect items
- * the agent has since moved or dropped.
+ * the agent has since moved or dropped. Reads only the legacy row vocabulary
+ * (name, qty, description, location): a seed is allowed only while no dossier
+ * exists, which means the projection has never written this state, so richer
+ * fields cannot be present to read.
  */
 export function buildSeedRowsFromPlayerStats(
   mergedPlayerStats: Record<string, unknown> | null | undefined,
@@ -739,6 +746,7 @@ export function buildSeedRowsFromPlayerStats(
         name,
         type,
         qty: typeof row.qty === "number" ? row.qty : undefined,
+        description: readOptionalString(row.description),
         location: readOptionalString(row.location),
         seededFromPlayerStats: true,
       });
