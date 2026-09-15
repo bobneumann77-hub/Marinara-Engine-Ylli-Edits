@@ -92,9 +92,16 @@ export async function applyDossierUpdate(
   // prior state: an EMPTY dossier, never the live row, which belongs to
   // whichever branch ran last and would leak its items in here.
   const baseSnapshot = await snapshotStorage.getLatestForAnchors(args.chatId, args.baseAnchors);
+  // A seed row bootstraps a chat that never had a dossier. A swipe or rewind also
+  // resolves to an empty base, and `playerStats` there belongs to the branch being
+  // left, so the seed may only run while the chat has no dossier at all.
+  const rows =
+    (await storage.getForChat(args.chatId)) === null
+      ? args.rows
+      : args.rows.filter((row) => !row.seededFromPlayerStats);
   const fieldLocks = args.fieldLocks ?? null;
   const context = await resolveReconcileContext(args);
-  return reconcileAndProjectItemDossier(storage, args.chatId, args.rows, context, {
+  return reconcileAndProjectItemDossier(storage, args.chatId, rows, context, {
     playerStats: args.playerStats,
     base: baseSnapshot ? baseSnapshot.dossier : null,
     // Prefix-aware: a group lock OR any row-level lock beneath it pins the array.
