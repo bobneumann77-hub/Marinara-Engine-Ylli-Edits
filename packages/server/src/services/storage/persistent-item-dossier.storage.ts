@@ -52,7 +52,11 @@ export interface DossierDefinition {
   description?: string | null;
   isNamedArtifact: boolean;
   aliases?: string[]; // stubbed for future flair-name mapping; do not use yet
-  createdAt: string;
+  /**
+   * Despite updatedAt not being read yet, i'm leaving it in, to eventually offer
+   * an UI opt-in removal of stale definitions, when they haven't been used in X Time.
+   * e.g in the case of an incredibly specific item creation.
+   */
   updatedAt: string;
   // Escape hatch: future agents may attach extra fields without a schema bump.
   [key: string]: unknown;
