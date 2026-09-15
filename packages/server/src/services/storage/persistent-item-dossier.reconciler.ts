@@ -318,7 +318,6 @@ function mintDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): D
     description: row.description ?? null,
     isNamedArtifact: row.uuid === undefined && row.isUnique === true,
     aliases: [],
-    createdAt: ts,
     updatedAt: ts,
   };
   dossier.definitions.push(definition);
