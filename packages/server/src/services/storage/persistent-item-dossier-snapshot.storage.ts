@@ -5,6 +5,10 @@
 // `game_state_snapshots`: (chatId, messageId, swipeIndex), written only on turns
 // that changed it. Each row is a FULL dossier rather than a delta, so a rewind
 // restores destroyed items and keeps definitions the live dossier has dropped.
+//
+// The `data` payload is gzipped behind a marker (see encodeDossier); rows written
+// before that change hold plain JSON and still parse.
+import { gunzipSync, gzipSync } from "node:zlib";
 import { and, desc, eq, inArray } from "../../db/file-query.js";
 import type { DB } from "../../db/connection.js";
 import { itemDossierSnapshots } from "../../db/schema/index.js";
@@ -49,6 +53,30 @@ export interface ItemDossierSnapshotStorage {
   deleteByChatId(chatId: string): Promise<void>;
 }
 
+/** Marks a gzip+base64 snapshot payload. Anything without this prefix is plain JSON. */
+const COMPRESSED_SNAPSHOT_PREFIX = "gzip:";
+
+/**
+ * Snapshots scale with the dossier -- five writes a turn on a swipe-heavy chat --
+ * so the payload is gzipped. The marker keeps rows written before this change
+ * readable, and a payload that does not actually shrink stays plain, because
+ * base64 costs a third again and can outweigh gzip on a small dossier.
+ *
+ * Only snapshots are compressed: the live dossier is a single row and is worth
+ * keeping readable in dumps.
+ */
+function encodeDossier(dossier: PersistentItemDossier): string {
+  const plain = JSON.stringify(dossier);
+  const compressed = `${COMPRESSED_SNAPSHOT_PREFIX}${gzipSync(plain).toString("base64")}`;
+  return compressed.length < plain.length ? compressed : plain;
+}
+
+function decodeDossier(data: string): PersistentItemDossier {
+  if (!data.startsWith(COMPRESSED_SNAPSHOT_PREFIX)) return JSON.parse(data) as PersistentItemDossier;
+  const body = Buffer.from(data.slice(COMPRESSED_SNAPSHOT_PREFIX.length), "base64");
+  return JSON.parse(gunzipSync(body).toString("utf8")) as PersistentItemDossier;
+}
+
 function parseRow(row: {
   id: string;
   chatId: string;
@@ -62,7 +90,7 @@ function parseRow(row: {
     chatId: row.chatId,
     messageId: row.messageId,
     swipeIndex: row.swipeIndex,
-    dossier: JSON.parse(row.data) as PersistentItemDossier,
+    dossier: decodeDossier(row.data),
     createdAt: row.createdAt,
   };
 }
@@ -138,7 +166,7 @@ export function createItemDossierSnapshotStorage(db: DB): ItemDossierSnapshotSto
             eq(itemDossierSnapshots.swipeIndex, swipeIndex),
           ),
         );
-      const data = JSON.stringify(dossier);
+      const data = encodeDossier(dossier);
       if (existing[0]) {
         await db.update(itemDossierSnapshots).set({ data }).where(eq(itemDossierSnapshots.id, existing[0].id));
         return;

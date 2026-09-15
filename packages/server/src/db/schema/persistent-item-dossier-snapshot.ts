@@ -15,7 +15,9 @@ export const itemDossierSnapshots = fileTable("persistent_item_dossier_snapshots
   /** FK to messages.id — cascade handled at application level. */
   messageId: text("message_id").notNull(),
   swipeIndex: integer("swipe_index").notNull().default(0),
-  /** Full `PersistentItemDossier` (definitions + stacks) as JSON. */
+  /** Full `PersistentItemDossier` (definitions + stacks). Newer rows are gzip+base64
+   *  behind a `gzip:` marker; rows without it are plain JSON. Decode via the
+   *  snapshot storage, which owns the encoding. */
   data: text("data").notNull(),
   createdAt: text("created_at").notNull(),
 });
