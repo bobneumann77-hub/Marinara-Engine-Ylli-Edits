@@ -96,8 +96,12 @@ export interface ItemDossierReconcileContext {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/** Canonical key for name matching: trim, lowercase, collapse whitespace. */
-function canonicalName(value: unknown): string {
+/**
+ * Canonical key for name matching: trim, lowercase, collapse whitespace.
+ * Exported for the editor adapter's move rule, which must compare the same keys
+ * the matcher does instead of keeping a second, drifting copy.
+ */
+export function canonicalName(value: unknown): string {
   return typeof value === "string" ? value.trim().toLocaleLowerCase("en-US").replace(/\s+/g, " ") : "";
 }
 

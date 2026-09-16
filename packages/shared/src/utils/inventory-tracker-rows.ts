@@ -153,12 +153,28 @@ export function normalizeInventoryTrackerPlayerStats(playerStats: unknown): unkn
 }
 
 /**
+ * Text fields the editor may set on a row. `null` is meaningful on the
+ * definition-backed ones (description, class, rarity): it drops the stack override so
+ * the item type shows again. flair, location and equipmentSlot have no fallback, so
+ * there null and an empty string both just clear.
+ */
+const ROW_TEXT_FIELDS = ["description", "location", "class", "rarity", "flair", "equipmentSlot"] as const;
+
+/** Per-instance flags the editor may set. */
+const ROW_FLAG_FIELDS = ["isUnique", "isStolen", "isGifted"] as const;
+
+/**
  * Describe the first row a human would consider malformed, or `null` when the whole
  * array is usable.
  *
  * Exists because `normalizeInventoryTrackerRows` silently discards junk, which is the
  * right behaviour for an inline edit and the wrong behaviour for a JSON editor where
  * quietly emptying a hand-written group looks like data loss.
+ *
+ * Accepts every field the dossier write path carries, so the editor is limited by the
+ * vocabulary rather than by this check -- a bare `uuid` and a `null` on a text field
+ * included. Still deliberately stricter than the agent path: a row needs a name, and
+ * `qty` stays at 1 or above, because a zero destroys the stack it names.
  */
 export function findInvalidInventoryTrackerRow(value: unknown): string | null {
   if (!Array.isArray(value)) return "must be an array";
@@ -166,10 +182,26 @@ export function findInvalidInventoryTrackerRow(value: unknown): string | null {
     if (!isPlainRecord(candidate)) return `row ${index} must be an object`;
     if (typeof candidate.name !== "string") return `row ${index} is missing a string "name"`;
     if (!normalizeInventoryTrackerName(candidate.name)) return `row ${index} has an empty "name"`;
-    for (const field of ["description", "location"] as const) {
-      if (candidate[field] !== undefined && typeof candidate[field] !== "string") {
+    if (candidate.uuid !== undefined && typeof candidate.uuid !== "string") {
+      return `row ${index} has a non-string "uuid"`;
+    }
+    for (const field of ROW_TEXT_FIELDS) {
+      const fieldValue = candidate[field];
+      if (fieldValue !== undefined && fieldValue !== null && typeof fieldValue !== "string") {
         return `row ${index} has a non-string "${field}"`;
       }
+    }
+    for (const field of ROW_FLAG_FIELDS) {
+      if (candidate[field] !== undefined && typeof candidate[field] !== "boolean") {
+        return `row ${index} has a non-boolean "${field}"`;
+      }
+    }
+    if (
+      candidate.customFields !== undefined &&
+      candidate.customFields !== null &&
+      !isPlainRecord(candidate.customFields)
+    ) {
+      return `row ${index} has a non-object "customFields"`;
     }
     if (candidate.qty === undefined || candidate.qty === null) continue;
     const numericQty = Number(candidate.qty);

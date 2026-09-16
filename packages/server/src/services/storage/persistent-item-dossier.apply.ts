@@ -17,7 +17,11 @@ import { resolveCharacterNameMap } from "./character-name-map.js";
 import { reconcileAndProjectItemDossier } from "./persistent-item-dossier.projection.js";
 import { createPersistentItemDossierStorage } from "./persistent-item-dossier.storage.js";
 import { createItemDossierSnapshotStorage } from "./persistent-item-dossier-snapshot.storage.js";
-import type { DossierAgentRow, ItemDossierReconcileContext } from "./persistent-item-dossier.reconciler.js";
+import {
+  canonicalName,
+  type DossierAgentRow,
+  type ItemDossierReconcileContext,
+} from "./persistent-item-dossier.reconciler.js";
 
 export interface ApplyDossierUpdateArgs {
   db: DB;
@@ -163,12 +167,18 @@ function editorBool(value: unknown): boolean | undefined {
  * `isDestroyed` and the engine-internal flags are dropped: deletion here is
  * explicit via the `removed` lists, never a stale row flag, and a save must
  * never mint or seed.
+ *
+ * Removals are appended after every group's rows and skip an identity this same
+ * payload also updated -- the move rule the agent adapter applies, which the
+ * editor path used to lack.
  */
 export function buildDossierRowsFromEditorRows(
   groups: Record<string, unknown> | null | undefined,
   removed: Record<string, unknown> | null | undefined,
 ): DossierAgentRow[] {
   const rows: DossierAgentRow[] = [];
+  const updatedUuids = new Set<string>();
+  const updatedNames = new Set<string>();
   for (const [group, type] of Object.entries(DOSSIER_SAVE_GROUP_TYPES)) {
     const list = groups?.[group];
     if (!Array.isArray(list)) continue;
@@ -178,6 +188,8 @@ export function buildDossierRowsFromEditorRows(
       const uuid = editorString(row.uuid);
       const name = typeof row.name === "string" ? row.name.trim() : "";
       if (!uuid && !name) continue;
+      if (uuid) updatedUuids.add(uuid);
+      if (name) updatedNames.add(canonicalName(name));
       rows.push({
         name,
         type,
@@ -197,19 +209,30 @@ export function buildDossierRowsFromEditorRows(
           : {}),
       });
     }
-    // Removals are per-group so a name-only entry cannot cross groups.
+  }
+  // Removals run after every group's rows, and the identity check is cross-group
+  // on purpose: equipping moves a uuid from `inventory` to `equipped`, so a
+  // per-group check would tombstone the item it just moved. The uuid test is
+  // precise. The name test applies only to the uuid-less form (a bare string),
+  // because an editor sends its whole array -- every surviving row counts as an
+  // update -- and a name check would then swallow a real deletion of one of two
+  // identically named stacks. Unlike the agent adapter, a bare string here is
+  // always a name: our client sends { uuid, name } whenever it has an id.
+  for (const [group, type] of Object.entries(DOSSIER_SAVE_GROUP_TYPES)) {
     const removals = removed?.[group];
     if (!Array.isArray(removals)) continue;
     for (const raw of removals) {
-      if (typeof raw === "string") {
-        if (raw.trim()) rows.push({ name: raw.trim(), type, removal: true });
-        continue;
-      }
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-      const entry = raw as Record<string, unknown>;
+      const entry =
+        typeof raw === "string"
+          ? { name: raw.trim() }
+          : raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>)
+            : undefined;
+      if (!entry) continue;
       const uuid = editorString(entry.uuid);
       const name = typeof entry.name === "string" ? entry.name.trim() : "";
       if (!uuid && !name) continue;
+      if (uuid ? updatedUuids.has(uuid) : updatedNames.has(canonicalName(name))) continue;
       rows.push({ name, type, ...(uuid ? { uuid } : {}), removal: true });
     }
   }
