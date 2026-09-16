@@ -137,7 +137,7 @@ export function RoleplayHUD({
   const gameState = useGameStateStore((s) => s.current);
   const gameStateRefreshing = useGameStateStore((s) => s.isRefreshing);
   const setGameState = useGameStateStore((s) => s.setGameState);
-  const { patchField, patchPlayerStats, patchPlayerStatsMany } = useGameStatePatcher(chatId, "roleplay-hud");
+  const { patchField, patchPlayerStats, patchPlayerStatsManyLocal } = useGameStatePatcher(chatId, "roleplay-hud");
 
   const { data: agentConfigs } = useAgentConfigs();
   const { data: advancedMemoryStatus } = useAdvancedMemoryStatus(chatId, advancedMemoryEnabled);
@@ -271,10 +271,12 @@ export function RoleplayHUD({
   const inventoryTrackerInventory = playerStats?.inventoryTrackerInventory ?? [];
   // Editing one group can rewrite two, so the optimistic patch lands in one write.
   // The dossier save is queued FIRST: it captures the pre-edit baseline, and the
-  // removal diff needs that, not the optimistic rows.
+  // removal diff needs that, not the optimistic rows. The write itself is local-only --
+  // the dossier owns this field, and the game-state PATCH would repaint normalized
+  // rows over the projection it just stored.
   const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) => {
     queueDossierSave(chatId);
-    patchPlayerStatsMany((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
+    patchPlayerStatsManyLocal((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
   };
   const fieldLocks = gameState ? normalizeTrackerFieldLocksForState(gameState.fieldLocks, gameState) : null;
   const hiddenTrackerFields = gameState ? normalizeTrackerHiddenFields(gameState.hiddenTrackerFields) : null;

@@ -501,8 +501,46 @@ function applyRowUpdate(
 
   stack.locationRef = stampLocation(stack.locationRef ?? {}, row, context);
   if (context.currentTurn != null) stack.lastSeenTurn = context.currentTurn;
+  promoteToDefinition(dossier, stack);
   if (!isDeepStrictEqual(contentBefore, stackContentFields(stack))) {
     stack.updatedAt = ts;
+  }
+}
+
+/**
+ * Promote-while-null: the first value a stack writes into a definition-backed
+ * field becomes the type's default, so a rushed first creation fills itself in
+ * organically instead of staying bare forever (and every later stack of that
+ * type inherits the wording).
+ *
+ * Only `null` is promotable -- a value someone already decided is out of reach,
+ * so a curated definition can never be clobbered and first-writer-wins stays
+ * deterministic. The promotable set is exactly the trio with a definition
+ * counterpart: `description`, `class`, `rarity`. `name` is identity, not a
+ * field (a definition is minted FROM a row, so it always arrives named), and the
+ * instance-only fields (`flair`, `location`, `equipmentSlot`, `isStolen`,
+ * `isGifted`) are flavour about THIS pile -- promoting one would make an
+ * afternoon in the rain the world's default. `isNamedArtifact` stays mint-only.
+ *
+ * An empty string is a deliberate "present but empty override" that suppresses
+ * the definition for this stack, so it is never promoted: doing so would blank
+ * the whole item type. It stays an override.
+ *
+ * Ride-along: a stack whose value now equals the definition's drops its own
+ * override, so promotion cannot leave a redundant copy behind -- and a value
+ * typed in that merely matches the type reads the same either way.
+ */
+function promoteToDefinition(dossier: PersistentItemDossier, stack: DossierStack): void {
+  const definition = dossier.definitions.find((d) => d.id === stack.definitionId);
+  if (!definition) return;
+  for (const field of ["description", "class", "rarity"] as const) {
+    const value = stack[field];
+    if (value === undefined || value === null || value === "") continue;
+    if (definition[field] === null || definition[field] === undefined) {
+      definition[field] = value;
+      definition.updatedAt = now();
+    }
+    if (definition[field] === value) stack[field] = null;
   }
 }
 
@@ -709,7 +747,9 @@ export async function reconcileItemDossier(
     const stack = mintStack(definition, row, context, owner);
     if (matchedDefinition) {
       // A matched definition is shared vocabulary: the row's metadata is an
-      // instance claim, a stack override, not a rewrite of the template.
+      // instance claim, a stack override -- not a rewrite of the template. The
+      // exception is a template that never had a value: promoting below lets the
+      // first row that states one fill it in (and drop its own override).
       if (row.class !== undefined && row.class !== matchedDefinition.class) stack.class = row.class;
       if (row.rarity !== undefined && row.rarity !== matchedDefinition.rarity) stack.rarity = row.rarity;
       if (row.description !== undefined && row.description !== matchedDefinition.description) {
@@ -717,6 +757,7 @@ export async function reconcileItemDossier(
       }
     }
     dossier.stacks.push(stack);
+    promoteToDefinition(dossier, stack);
   }
 
   mergeDuplicateStacks(dossier);

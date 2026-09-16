@@ -87,8 +87,28 @@ export function inventoryTrackerComparableName(value: unknown): string {
 }
 
 /**
+ * Read a row's dossier uuid, when the caller's rows carry one.
+ *
+ * `InventoryTrackerRow` describes the four fields the tracker displays; rows read back
+ * from the item dossier also carry `uuid`, `class`, `rarity` and `flair` at runtime. The
+ * exclusivity rule below needs the uuid, so it is read through this narrow accessor
+ * rather than widening a shared type the prompt and agent paths also use.
+ */
+function inventoryTrackerRowUuid(row: InventoryTrackerRow | undefined): string {
+  const value = (row as { uuid?: unknown } | undefined)?.uuid;
+  return typeof value === "string" ? value : "";
+}
+
+/**
  * The exclusivity rule, in one place: an item that is equipped or counted as money is
  * not also sitting in the backpack.
+ *
+ * Rows carrying a uuid are compared by uuid, not by name. Two different items that
+ * happen to share a name are not the same item, and treating them as one fed a
+ * filtered view into a save: adding a second "Sketchbook" to equipped removed the real,
+ * uuid-bearing sketchbook from the carried group, and the dossier save read that
+ * absence as a deletion. Rows without a uuid keep the name comparison, which is what
+ * the normalized callers have always used -- both legacy builders strip uuids first.
  *
  * Note this is a one-way filter, not three-way exclusivity — currencies and equipped
  * may still name the same thing. That is pre-existing behaviour, kept deliberately so
@@ -100,8 +120,13 @@ export function excludeInventoryTrackerCarriedDuplicates(
   equipped: readonly InventoryTrackerRow[],
 ): InventoryTrackerRow[] {
   if (carried.length === 0 || (currencies.length === 0 && equipped.length === 0)) return [...carried];
-  const excluded = new Set([...currencies, ...equipped].map((row) => inventoryTrackerComparableName(row?.name)));
-  return carried.filter((row) => !excluded.has(inventoryTrackerComparableName(row?.name)));
+  const otherRows = [...currencies, ...equipped];
+  const excludedUuids = new Set(otherRows.map((row) => inventoryTrackerRowUuid(row)).filter(Boolean));
+  const excludedNames = new Set(otherRows.map((row) => inventoryTrackerComparableName(row?.name)));
+  return carried.filter((row) => {
+    const uuid = inventoryTrackerRowUuid(row);
+    return uuid ? !excludedUuids.has(uuid) : !excludedNames.has(inventoryTrackerComparableName(row?.name));
+  });
 }
 
 /** Rows to use for a group nobody is rewriting. Never trusts the stored value's shape. */

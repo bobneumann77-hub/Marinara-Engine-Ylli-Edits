@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Backpack, Lock, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
@@ -65,6 +65,42 @@ type InventoryGroupProps = {
 function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: InventoryGroupProps) {
   const { t: localizeUi } = useUiTranslation();
   const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
+  // A row being created is a DRAFT: it lives here, not in the store, so the save
+  // queue can never post an unnamed placeholder and mint a permanent "New item"
+  // definition out of one click (the debounce fires long before a name is typed).
+  // It becomes a real row the moment it has a name; unnamed when the panel
+  // unmounts, it is discarded and nothing ever happened. The ref mirrors the state
+  // so a blur racing an Enter cannot commit the same row twice.
+  const [draftName, setDraftName] = useState<string | null>(null);
+  const draftRef = useRef<string | null>(null);
+
+  const openDraft = () => {
+    if (draftRef.current !== null) return;
+    draftRef.current = "";
+    setDraftName("");
+  };
+
+  const updateDraft = (value: string) => {
+    if (draftRef.current === null) return;
+    draftRef.current = value;
+    setDraftName(value);
+  };
+
+  const cancelDraft = () => {
+    draftRef.current = null;
+    setDraftName(null);
+  };
+
+  const commitDraft = () => {
+    if (draftRef.current === null) return;
+    const name = draftRef.current.trim();
+    draftRef.current = null;
+    setDraftName(null);
+    if (!name) return;
+    // The definition is minted from THIS row, so it carries the name actually
+    // typed -- which is the whole point of holding it back until now.
+    onUpdate([...rows, { name }]);
+  };
   const updateRow = (index: number, row: InventoryTrackerRow) => {
     const previous = rows[index];
     if (previous && previous.name !== row.name) {
@@ -102,12 +138,7 @@ function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: I
         {addMode && (
           <AddRowButton
             title={localizeUi("ui.trackerPanel.inventoryTracker.addToGroup", { group: label })}
-            onClick={() =>
-              onUpdate([
-                ...rows,
-                { name: nextPlaceholderName(rows, localizeUi("ui.trackerPanel.inventoryTracker.newItem")) },
-              ])
-            }
+            onClick={openDraft}
             className="h-5 min-h-5 w-5 min-w-5"
           />
         )}
@@ -213,6 +244,23 @@ function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: I
             </div>
           );
         })}
+        {draftName !== null && (
+          <div className="mari-chrome-tag flex min-h-6 min-w-0 max-w-full items-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 py-1 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7">
+            <input
+              autoFocus
+              value={draftName}
+              placeholder={nextPlaceholderName(rows, localizeUi("ui.trackerPanel.inventoryTracker.newItem"))}
+              aria-label={localizeUi("ui.trackerPanel.inventoryTracker.addToGroup", { group: label })}
+              onChange={(event) => updateDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitDraft();
+                if (event.key === "Escape") cancelDraft();
+              }}
+              onBlur={commitDraft}
+              className="min-w-0 flex-1 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-[0.625rem] text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30"
+            />
+          </div>
+        )}
       </div>
     </div>
   );

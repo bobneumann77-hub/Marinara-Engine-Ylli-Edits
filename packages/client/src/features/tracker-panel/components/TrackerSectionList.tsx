@@ -49,7 +49,7 @@ export function TrackerSectionList({
   orderedTrackerSections,
   patchField,
   patchPlayerStats,
-  patchPlayerStatsMany,
+  patchPlayerStatsManyLocal,
   resolveSpriteCharacterId,
   spriteExpressions,
   trackerPanelCollapsedSections,
@@ -82,7 +82,8 @@ export function TrackerSectionList({
   orderedTrackerSections: TrackerPanelSection[];
   patchField: (field: GameStatePatchField, value: unknown) => void;
   patchPlayerStats: (field: keyof NonNullable<GameState["playerStats"]>, value: unknown) => void;
-  patchPlayerStatsMany: (
+  /** Store-only `playerStats` write: the Inventory Tracker persists through the dossier endpoint. */
+  patchPlayerStatsManyLocal: (
     patch:
       | Partial<NonNullable<GameState["playerStats"]>>
       | ((current: NonNullable<GameState["playerStats"]>) => Partial<NonNullable<GameState["playerStats"]>>),
@@ -140,10 +141,12 @@ export function TrackerSectionList({
     : [];
   // Editing one group can rewrite two, so the optimistic patch lands in one write.
   // The dossier save is queued FIRST: it captures the pre-edit baseline, and the
-  // removal diff needs that, not the optimistic rows.
+  // removal diff needs that, not the optimistic rows. The write itself is local-only --
+  // the dossier owns this field, and the game-state PATCH would repaint normalized
+  // rows over the projection it just stored.
   const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) => {
     queueDossierSave(activeChatId);
-    patchPlayerStatsMany((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
+    patchPlayerStatsManyLocal((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
   };
   const {
     addCharacter,
