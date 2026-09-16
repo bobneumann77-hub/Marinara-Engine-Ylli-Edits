@@ -28,30 +28,86 @@ function rowName(row: unknown): string | undefined {
   return undefined;
 }
 
+type RemovedEntry = string | { uuid: string; name?: string };
+
 /**
- * Deletions are explicit: a row the editor dropped is reported by uuid, falling
- * back to the exact name when the displayed row had none. Matching a uuid first
- * keeps the tombstone type-agnostic, like the agent path.
+ * A before/after diff cannot tell a deletion from a uuid edit: editing a uuid
+ * drops the old value out of the after-list while the row is still on screen,
+ * so the diff would tombstone an item that never left. Pair each after-row
+ * whose uuid the server never emitted with the one before-row of the same name
+ * that nothing else claims, restore that uuid on the posted row (uuid is a
+ * selector, so the mangled value never travels), and keep that before-row out
+ * of `removed`.
+ *
+ * Ambiguity pairs nothing -- a name matching several before-rows, or several
+ * after-rows claiming one -- and the removal stands: a stray delete is visible
+ * and recoverable on a rewind, a wrong resurrection is not.
+ *
+ * A before-row nothing paired with is reported by uuid, falling back to the
+ * exact name when the displayed row had none.
  */
-function buildRemoved(before: unknown[], after: unknown[]): (string | { uuid: string; name?: string })[] {
-  const afterKeys = new Set(after.map(rowUuid).filter((uuid): uuid is string => !!uuid));
-  const afterNames = new Set(
-    after
-      .map(rowName)
-      .filter((name): name is string => !!name)
-      .map((name) => name.toLowerCase()),
-  );
-  const removed: (string | { uuid: string; name?: string })[] = [];
+function reconcileGroupEdits(before: unknown[], after: unknown[]): { rows: unknown[]; removed: RemovedEntry[] } {
+  const beforeUuids = new Set<string>();
+  const beforeByName = new Map<string, unknown[]>();
+  for (const row of before) {
+    const uuid = rowUuid(row);
+    if (uuid) beforeUuids.add(uuid);
+    const name = rowName(row)?.toLowerCase();
+    if (name) beforeByName.set(name, [...(beforeByName.get(name) ?? []), row]);
+  }
+
+  const afterUuids = new Set<string>();
+  const afterNames = new Set<string>();
+  const claimedUuids = new Set<string>();
+  for (const row of after) {
+    const uuid = rowUuid(row);
+    if (uuid) {
+      afterUuids.add(uuid);
+      if (beforeUuids.has(uuid)) claimedUuids.add(uuid);
+    }
+    const name = rowName(row)?.toLowerCase();
+    if (name) afterNames.add(name);
+  }
+
+  const repairs = new Map<number, string>();
+  const keptAlive = new Set<string>();
+  const unpaired = new Map<string, number[]>();
+  after.forEach((row, index) => {
+    const uuid = rowUuid(row);
+    if (uuid && beforeUuids.has(uuid)) return;
+    const name = rowName(row)?.toLowerCase();
+    if (!name || !beforeByName.has(name)) return;
+    unpaired.set(name, [...(unpaired.get(name) ?? []), index]);
+  });
+  for (const [name, indices] of unpaired) {
+    const candidates = (beforeByName.get(name) ?? []).filter((row) => {
+      const uuid = rowUuid(row);
+      return !!uuid && !claimedUuids.has(uuid);
+    });
+    const restored = candidates.length === 1 ? rowUuid(candidates[0]) : undefined;
+    if (!restored || indices.length !== 1) continue;
+    repairs.set(indices[0], restored);
+    claimedUuids.add(restored);
+    keptAlive.add(restored);
+  }
+
+  const rows = after.map((row, index) => {
+    const restored = repairs.get(index);
+    if (!restored || !row || typeof row !== "object" || Array.isArray(row)) return row;
+    return { ...(row as Record<string, unknown>), uuid: restored };
+  });
+
+  const removed: RemovedEntry[] = [];
   for (const row of before) {
     const uuid = rowUuid(row);
     if (uuid) {
-      if (!afterKeys.has(uuid)) removed.push({ uuid, name: rowName(row) });
+      if (!afterUuids.has(uuid) && !keptAlive.has(uuid)) removed.push({ uuid, name: rowName(row) });
       continue;
     }
     const name = rowName(row);
     if (name && !afterNames.has(name.toLowerCase())) removed.push(name);
   }
-  return removed;
+  return { rows, removed };
 }
 
 /**
@@ -71,15 +127,18 @@ export async function saveInventoryTrackerToDossier(
     equipped: snapshot.playerStats?.inventoryTrackerEquipped ?? [],
     inventory: snapshot.playerStats?.inventoryTrackerInventory ?? [],
   };
+  const rows: EditorGroups = { currencies: [], equipped: [], inventory: [] };
+  const removed: Record<InventoryTrackerGroup, RemovedEntry[]> = { currencies: [], equipped: [], inventory: [] };
+  for (const group of ["currencies", "equipped", "inventory"] as const) {
+    const reconciled = reconcileGroupEdits(before[group], groups[group]);
+    rows[group] = reconciled.rows;
+    removed[group] = reconciled.removed;
+  }
   const body = {
     messageId: snapshot.messageId,
     swipeIndex: snapshot.swipeIndex,
-    rows: groups,
-    removed: {
-      currencies: buildRemoved(before.currencies, groups.currencies),
-      equipped: buildRemoved(before.equipped, groups.equipped),
-      inventory: buildRemoved(before.inventory, groups.inventory),
-    },
+    rows,
+    removed,
   };
   if (!body.messageId || !Number.isInteger(body.swipeIndex) || (body.swipeIndex ?? -1) < 0) {
     throw new Error("No message anchor is available to save this inventory against");
