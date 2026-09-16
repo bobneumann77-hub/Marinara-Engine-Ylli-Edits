@@ -22,7 +22,8 @@ import type { StatIconLookup } from "../hooks/use-stat-icons";
 import { useTrackerMutations } from "../hooks/use-tracker-mutations";
 import { useTrackerRerun } from "../hooks/use-tracker-rerun";
 import type { PersonaPortraitSaveSnapshot } from "../hooks/use-persona-portrait-save";
-import { buildInventoryTrackerEditPatch } from "../lib/inventory-tracker-edit";
+import { buildInventoryTrackerRichEditPatch } from "../lib/inventory-tracker-edit";
+import { queueDossierSave } from "../lib/inventory-tracker-dossier-queue";
 import { TRACKER_SECTION_AGENT_TYPES, TRACKER_SECTION_RERUN_TITLES } from "../lib/tracker-panel.constants";
 import type { TrackerPanelSection, TrackerSpriteLookup } from "../tracker-panel.types";
 import { SectionIconButton } from "./controls/SectionControls";
@@ -137,9 +138,13 @@ export function TrackerSectionList({
   const inventoryTrackerInventory = Array.isArray(playerStats?.inventoryTrackerInventory)
     ? playerStats.inventoryTrackerInventory
     : [];
-  // Editing one group can rewrite two, so this must land as a single patch.
-  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) =>
-    patchPlayerStatsMany((current) => buildInventoryTrackerEditPatch(current, group, rows));
+  // Editing one group can rewrite two, so the optimistic patch lands in one write.
+  // The dossier save is queued FIRST: it captures the pre-edit baseline, and the
+  // removal diff needs that, not the optimistic rows.
+  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) => {
+    queueDossierSave(activeChatId);
+    patchPlayerStatsMany((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
+  };
   const {
     addCharacter,
     addPersonaStat,

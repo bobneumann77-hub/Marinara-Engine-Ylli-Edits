@@ -8,6 +8,10 @@
 // Editing one group can change two: equipping a carried item removes it from the
 // backpack. That is why this returns a whole patch instead of one array — the caller
 // must persist every field it produces, in one write.
+//
+// Two builders live here. The normalized one serves the game-state PATCH path. The
+// rich one keeps the rows exactly as the panel holds them, because that path now
+// writes through the item dossier, where uuid/class/rarity/flair are the point.
 import {
   excludeInventoryTrackerCarriedDuplicates,
   normalizeInventoryTrackerRows,
@@ -46,6 +50,36 @@ export function buildInventoryTrackerEditPatch(
   const carried = group === "inventory" ? normalized : (currentPlayerStats?.inventoryTrackerInventory ?? []);
 
   const patch: Partial<InventoryTrackerPatch> = { [FIELD_BY_GROUP[group]]: normalized };
+
+  const deduped = excludeInventoryTrackerCarriedDuplicates(carried, currencies, equipped);
+  if (deduped.length !== carried.length) patch.inventoryTrackerInventory = deduped;
+
+  return patch;
+}
+
+/**
+ * The dossier-backed variant of {@link buildInventoryTrackerEditPatch}.
+ *
+ * The tracker panel and the HUD popover persist through the item dossier now, so
+ * their rows have to reach the server untouched: uuid, class, rarity and flair
+ * belong to the stack, and the shared normalizer drops all four. Everything else —
+ * the whole-patch shape and the carried-duplicate trim — stays identical, so the
+ * optimistic store still matches what the caller is about to persist.
+ *
+ * `InventoryTrackerRow` declares name/qty/description/location only, but the rows
+ * the panel edits are projected rows and carry the richer fields at runtime. They
+ * are passed through as received; that is the point of this variant.
+ */
+export function buildInventoryTrackerRichEditPatch(
+  currentPlayerStats: PlayerStats | null | undefined,
+  group: InventoryTrackerGroup,
+  rows: InventoryTrackerRow[],
+): Partial<InventoryTrackerPatch> {
+  const currencies = group === "currencies" ? rows : (currentPlayerStats?.inventoryTrackerCurrencies ?? []);
+  const equipped = group === "equipped" ? rows : (currentPlayerStats?.inventoryTrackerEquipped ?? []);
+  const carried = group === "inventory" ? rows : (currentPlayerStats?.inventoryTrackerInventory ?? []);
+
+  const patch: Partial<InventoryTrackerPatch> = { [FIELD_BY_GROUP[group]]: rows };
 
   const deduped = excludeInventoryTrackerCarriedDuplicates(carried, currencies, equipped);
   if (deduped.length !== carried.length) patch.inventoryTrackerInventory = deduped;

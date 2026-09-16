@@ -2843,8 +2843,22 @@ export async function chatsRoutes(app: FastifyInstance) {
     // not write to a swipe it is not displaying.
     const { createGameStateStorage } = await import("../services/storage/game-state.storage.js");
     const gameStateStore = createGameStateStorage(app.db);
-    const snap = await gameStateStore.getByChatAndMessage(req.params.id, messageId, swipeIndex);
-    if (!snap) return reply.status(404).send({ error: "No game state at the given message + swipe" });
+    let snap = await gameStateStore.getByChatAndMessage(req.params.id, messageId, swipeIndex);
+    if (!snap) {
+      // A tracker turn need not have written a snapshot row for this swipe (the
+      // world-state agent may be off, or this is a first edit on a fresh chat),
+      // and the panel should still be able to save. Clone the state the panel is
+      // displaying -- the newest committed snapshot -- into a row for this
+      // message+swipe, the same convention the generate route uses. An explicit
+      // null base means "no base": an empty row, which is the honest one for a
+      // chat with no committed state yet.
+      const committed = (await gameStateStore.getLatestCommitted(req.params.id)) ?? null;
+      await gameStateStore.updateByMessage(messageId, swipeIndex, req.params.id, {}, undefined, {
+        baseSnapshot: committed,
+      });
+      snap = await gameStateStore.getByChatAndMessage(req.params.id, messageId, swipeIndex);
+    }
+    if (!snap) return reply.status(500).send({ error: "Could not create a game state for this message + swipe" });
     const snapshotRow = snap as Record<string, unknown>;
     const dossierIdentity = await resolveChatUserIdentity(createCharactersStorage(app.db), {
       personaId: chat.personaId,
