@@ -719,6 +719,19 @@ export function AgentSuiteModal({ chat, open, onClose, onCloseGuardChange, agent
       const snapshot = await api.get<GameState | null>(`/chats/${chat.id}/game-state`);
       if (!snapshot) throw new Error("No tracker snapshot to update");
       qc.setQueryData(gameStateKey, snapshot);
+      if (slice.save) {
+        // Slices with a save hook persist through their own endpoint and return
+        // the server's projected playerStats: adopt it before the modal closes,
+        // or the next read shows the pre-save state.
+        const parsed = JSON.parse(draftText);
+        const playerStats = await slice.save({ chatId: chat.id, snapshot, parsed });
+        const next = { ...snapshot, playerStats };
+        qc.setQueryData(gameStateKey, next);
+        if (useGameStateStore.getState().current?.chatId === chat.id) {
+          useGameStateStore.getState().setGameState(next);
+        }
+        return;
+      }
       const patch = slice.buildPatch(snapshot, JSON.parse(draftText));
       if ("error" in patch && typeof patch.error === "string") throw new Error(patch.error);
       // Target the exact row the snapshot came from, like use-game-state-patcher.
