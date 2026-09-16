@@ -126,6 +126,27 @@ function editorString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
+/**
+ * Presence-preserving text for the fields that fall back to the shared
+ * definition: `null` drops the override so the definition shows again, `""`
+ * keeps an empty override so the definition stays suppressed, and an absent key
+ * still means "untouched". Folding either value into `undefined` is what made
+ * an emptied box save nothing.
+ */
+function editorText(value: unknown): string | null | undefined {
+  if (typeof value === "string") return value;
+  return value === null ? null : undefined;
+}
+
+/**
+ * Presence-preserving text for fields with no definition fallback, where an
+ * empty value and an explicit `null` mean the same thing: clear it.
+ */
+function editorClearableText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  return value === null ? "" : undefined;
+}
+
 function editorBool(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -134,8 +155,9 @@ function editorBool(value: unknown): boolean | undefined {
  * Retype the save endpoint's editor rows into dossier rows. Editor rows are FULL
  * STATE per group -- both surfaces always send all three arrays -- so each row
  * is forwarded verbatim and the reconciler's SET semantics decide the rest: a
- * present field is written (an empty string clears it), an absent field is
- * untouched. A row may carry only a uuid; the reconciler's gate lets it through
+ * present field is written -- `null` reverts it to the definition, an empty
+ * string blanks it -- and an absent field is untouched. A row may carry only a
+ * uuid; the reconciler's gate lets it through
  * and findStack resolves it by id, falling back to the name tiers on a typo.
  *
  * `isDestroyed` and the engine-internal flags are dropped: deletion here is
@@ -161,12 +183,12 @@ export function buildDossierRowsFromEditorRows(
         type,
         ...(uuid ? { uuid } : {}),
         ...(typeof row.qty === "number" && Number.isFinite(row.qty) ? { qty: Math.max(0, Math.floor(row.qty)) } : {}),
-        flair: editorString(row.flair),
-        description: editorString(row.description),
-        location: editorString(row.location),
-        class: editorString(row.class),
-        rarity: editorString(row.rarity),
-        equipmentSlot: editorString(row.equipmentSlot),
+        flair: editorClearableText(row.flair),
+        description: editorText(row.description),
+        location: editorClearableText(row.location),
+        class: editorText(row.class),
+        rarity: editorText(row.rarity),
+        equipmentSlot: editorClearableText(row.equipmentSlot),
         isUnique: editorBool(row.isUnique),
         isStolen: editorBool(row.isStolen),
         isGifted: editorBool(row.isGifted),

@@ -43,9 +43,14 @@ export interface DossierAgentRow {
    */
   removal?: boolean;
   flair?: string;
-  description?: string;
-  class?: string;
-  rarity?: string;
+  /**
+   * Content override. `null` drops it so the shared definition shows again; an
+   * empty string keeps an empty override so the definition stays suppressed;
+   * omitting the field changes nothing.
+   */
+  description?: string | null;
+  class?: string | null;
+  rarity?: string | null;
   /** Free-text descriptor from the agent's `location`; stored as `DossierStack.locationText`. */
   location?: string;
   /** Omit for the persona's own items. On a `world` row, a non-persona owner means that character carries it. */
@@ -862,9 +867,14 @@ export function buildDossierRowsFromInventoryTracker({
     const removed = (group as { removed?: unknown }).removed;
     if (!Array.isArray(removed)) continue;
     for (const entry of removed) {
+      // A bare string is a uuid when the agent has one and a name otherwise, and
+      // this pass cannot tell the two apart: the dossier is not in scope here.
+      // Carry it as BOTH so each tier gets its shot downstream -- the uuid tier,
+      // the scoped name tiers, and the move-guard. The uuid field is only ever
+      // compared against stack ids, so a name sitting there is inert.
       const reference =
         typeof entry === "string"
-          ? { name: entry }
+          ? { uuid: entry, name: entry }
           : entry && typeof entry === "object" && !Array.isArray(entry)
             ? (entry as Record<string, unknown>)
             : undefined;
