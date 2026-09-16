@@ -115,3 +115,81 @@ export async function applyDossierUpdate(
     },
   });
 }
+
+const DOSSIER_SAVE_GROUP_TYPES: Record<string, DossierAgentRow["type"]> = {
+  currencies: "currency",
+  equipped: "equipped",
+  inventory: "inventory",
+};
+
+function editorString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+function editorBool(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * Retype the save endpoint's editor rows into dossier rows. Editor rows are FULL
+ * STATE per group -- both surfaces always send all three arrays -- so each row
+ * is forwarded verbatim and the reconciler's SET semantics decide the rest: a
+ * present field is written (an empty string clears it), an absent field is
+ * untouched. A row may carry only a uuid; the reconciler's gate lets it through
+ * and findStack resolves it by id, falling back to the name tiers on a typo.
+ *
+ * `isDestroyed` and the engine-internal flags are dropped: deletion here is
+ * explicit via the `removed` lists, never a stale row flag, and a save must
+ * never mint or seed.
+ */
+export function buildDossierRowsFromEditorRows(
+  groups: Record<string, unknown> | null | undefined,
+  removed: Record<string, unknown> | null | undefined,
+): DossierAgentRow[] {
+  const rows: DossierAgentRow[] = [];
+  for (const [group, type] of Object.entries(DOSSIER_SAVE_GROUP_TYPES)) {
+    const list = groups?.[group];
+    if (!Array.isArray(list)) continue;
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const row = raw as Record<string, unknown>;
+      const uuid = editorString(row.uuid);
+      const name = typeof row.name === "string" ? row.name.trim() : "";
+      if (!uuid && !name) continue;
+      rows.push({
+        name,
+        type,
+        ...(uuid ? { uuid } : {}),
+        ...(typeof row.qty === "number" && Number.isFinite(row.qty) ? { qty: Math.max(0, Math.floor(row.qty)) } : {}),
+        flair: editorString(row.flair),
+        description: editorString(row.description),
+        location: editorString(row.location),
+        class: editorString(row.class),
+        rarity: editorString(row.rarity),
+        equipmentSlot: editorString(row.equipmentSlot),
+        isUnique: editorBool(row.isUnique),
+        isStolen: editorBool(row.isStolen),
+        isGifted: editorBool(row.isGifted),
+        ...(row.customFields && typeof row.customFields === "object" && !Array.isArray(row.customFields)
+          ? { customFields: row.customFields as Record<string, unknown> }
+          : {}),
+      });
+    }
+    // Removals are per-group so a name-only entry cannot cross groups.
+    const removals = removed?.[group];
+    if (!Array.isArray(removals)) continue;
+    for (const raw of removals) {
+      if (typeof raw === "string") {
+        if (raw.trim()) rows.push({ name: raw.trim(), type, removal: true });
+        continue;
+      }
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const entry = raw as Record<string, unknown>;
+      const uuid = editorString(entry.uuid);
+      const name = typeof entry.name === "string" ? entry.name.trim() : "";
+      if (!uuid && !name) continue;
+      rows.push({ name, type, ...(uuid ? { uuid } : {}), removal: true });
+    }
+  }
+  return rows;
+}
