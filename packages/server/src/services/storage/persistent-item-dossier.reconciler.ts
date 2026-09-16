@@ -169,7 +169,9 @@ function isIdShaped(characterId: string | null | undefined, name: string | null 
 /**
  * Canonicalize an agent-supplied owner string:
  *   1. "world"                      -> nobody holds it
- *   2. omitted, or an alias         -> the persona identity
+ *   2. omitted, or an alias         -> the persona identity, EXCEPT on a world
+ *      row, where omitted means DISCARDED and resolves to "world": dropping
+ *      something should not keep it owned by the player forever
  *   3. the persona, by id then name -> the persona identity
  *   4. a chat character, by id then name, then its card aliases
  *   5. a present character (ids that only echo the name are rejected)
@@ -179,12 +181,23 @@ function isIdShaped(characterId: string | null | undefined, name: string | null 
  * engine-derived, while the tracker writes `presentCharacters` itself and may
  * call Storm "Ororo Munroe".
  */
-function resolveOwner(rawOwner: string | undefined, context: ItemDossierReconcileContext): ResolvedOwner {
+function resolveOwner(
+  rawOwner: string | undefined,
+  context: ItemDossierReconcileContext,
+  statedType?: string | null,
+): ResolvedOwner {
   const player = playerIdentity(context);
   const key = canonicalName(rawOwner);
 
   if (key === "world") return { name: "world", id: null, isPlayer: false };
-  if (!key || PLAYER_OWNER_ALIASES.has(key)) return { name: player.name, id: player.id, isPlayer: true };
+  if (!key) {
+    // An omitted owner is the persona, but a world row with no owner is an
+    // ABANDONED item, not a carried one. Explicit aliases below still mean
+    // the player everywhere.
+    if (statedType === "world") return { name: "world", id: null, isPlayer: false };
+    return { name: player.name, id: player.id, isPlayer: true };
+  }
+  if (PLAYER_OWNER_ALIASES.has(key)) return { name: player.name, id: player.id, isPlayer: true };
   if (key === canonicalName(player.name) || (player.id !== null && key === canonicalName(player.id))) {
     return { name: player.name, id: player.id, isPlayer: true };
   }
@@ -615,6 +628,12 @@ export async function reconcileItemDossier(
     if (raw.seededFromPlayerStats && !isFirstRun) continue;
     // Removals are match-only and never mint, so they run before the name gate:
     // a `removed` entry may carry only a uuid.
+    //
+    // Every way something dies lands on the same flag: an explicit
+    // `isDestroyed: true` row, a qty of 0 on an existing stack, or a `removed`
+    // entry (agent envelope or editor save) turned into a removal row here.
+    // The post-reconcile sweep then physically deletes a destroyed commodity
+    // and archives a destroyed unique at qty 0.
     if (raw.removal) {
       destroyRemovedStack(dossier, raw, resolveOwner(raw.owner, context).id);
       continue;
@@ -623,7 +642,7 @@ export async function reconcileItemDossier(
     // findStack resolves it by id, so it must not die at the name gate.
     if (!canonicalName(raw.name) && !raw.uuid) continue;
 
-    const owner = resolveOwner(raw.owner, context);
+    const owner = resolveOwner(raw.owner, context, raw.type);
     const row: DossierAgentRow = { ...raw, owner: owner.name };
     // The group the agent WROTE it in, captured before the hand-off flip below.
     // The partial-move test needs that intent, not the group the item is
@@ -664,6 +683,12 @@ export async function reconcileItemDossier(
       applyRowUpdate(dossier, existing, row, context, owner);
       continue;
     }
+
+    // A qty of 0 destroys an EXISTING stack, but it is not a total: an
+    // unmatched row would mint a fresh pile (at qty 1, per the floor below),
+    // resurrecting an item the agent just killed from out of context. Deletion
+    // goes through `removed`, never through minting.
+    if (row.qty !== undefined && row.qty <= 0) continue;
 
     const matchedDefinition = findDefinition(dossier, row);
     const definition = matchedDefinition ?? mintDefinition(dossier, row);
