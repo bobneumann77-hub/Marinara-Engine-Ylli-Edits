@@ -2855,7 +2855,10 @@ export async function chatsRoutes(app: FastifyInstance) {
       const projected = await applyDossierUpdate({
         db: app.db,
         chatId: req.params.id,
-        rows: buildDossierRowsFromEditorRows(groups, (body.removed ?? undefined) as Record<string, unknown> | undefined),
+        rows: buildDossierRowsFromEditorRows(
+          groups,
+          (body.removed ?? undefined) as Record<string, unknown> | undefined,
+        ),
         context: {
           personaId: dossierIdentity?.id ?? null,
           personaName: dossierIdentity?.name ?? null,
@@ -2879,9 +2882,7 @@ export async function chatsRoutes(app: FastifyInstance) {
       await app.db
         .update(gameStateSnapshots)
         .set({ playerStats: JSON.stringify(projected.playerStats) })
-        .where(
-          and(eq(gameStateSnapshots.chatId, req.params.id), eq(gameStateSnapshots.id, snapshotRow.id as string)),
-        );
+        .where(and(eq(gameStateSnapshots.chatId, req.params.id), eq(gameStateSnapshots.id, snapshotRow.id as string)));
       return { playerStats: projected.playerStats };
     } catch (err) {
       logger.error(err, "[item-dossier] Failed to save tracker edits");

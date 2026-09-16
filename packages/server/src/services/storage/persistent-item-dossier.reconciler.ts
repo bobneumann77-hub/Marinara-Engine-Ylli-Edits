@@ -242,6 +242,11 @@ function resolveOwner(
     };
   }
 
+  // Small models write "None" for "nobody holds it". It resolves to the world
+  // sentinel only after every real name tier above had its chance, so a card,
+  // alias or present character genuinely called None still wins.
+  if (key === "none") return { name: "world", id: null, isPlayer: false };
+
   // No card anywhere: the name carries the match until a real card appears.
   return { name: (rawOwner ?? "").trim(), id: null, isPlayer: false };
 }
