@@ -107,8 +107,14 @@ function inventoryTrackerRowUuid(row: InventoryTrackerRow | undefined): string {
  * happen to share a name are not the same item, and treating them as one fed a
  * filtered view into a save: adding a second "Sketchbook" to equipped removed the real,
  * uuid-bearing sketchbook from the carried group, and the dossier save read that
- * absence as a deletion. Rows without a uuid keep the name comparison, which is what
- * the normalized callers have always used -- both legacy builders strip uuids first.
+ * absence as a deletion.
+ *
+ * The name comparison is a fallback for rows that carry no identity at all, so it only
+ * applies when BOTH sides are uuid-less -- which is exactly the normalized callers, since
+ * both legacy builders strip uuids first. A uuid-less carried row is a brand-new item (the
+ * panel's draft chip), not one that is already equipped: matching it by name against a
+ * uuid-bearing equipped row dropped it before it could ever be saved, so a new pen could
+ * be created in equipped but never in inventory.
  *
  * Note this is a one-way filter, not three-way exclusivity — currencies and equipped
  * may still name the same thing. That is pre-existing behaviour, kept deliberately so
@@ -122,7 +128,12 @@ export function excludeInventoryTrackerCarriedDuplicates(
   if (carried.length === 0 || (currencies.length === 0 && equipped.length === 0)) return [...carried];
   const otherRows = [...currencies, ...equipped];
   const excludedUuids = new Set(otherRows.map((row) => inventoryTrackerRowUuid(row)).filter(Boolean));
-  const excludedNames = new Set(otherRows.map((row) => inventoryTrackerComparableName(row?.name)));
+  // Only rows without an identity of their own may exclude by name: a uuid-bearing row is
+  // a different item that happens to share the name, and its name must not swallow a
+  // brand-new row that has not been saved (and so has no uuid) yet.
+  const excludedNames = new Set(
+    otherRows.filter((row) => !inventoryTrackerRowUuid(row)).map((row) => inventoryTrackerComparableName(row?.name)),
+  );
   return carried.filter((row) => {
     const uuid = inventoryTrackerRowUuid(row);
     return uuid ? !excludedUuids.has(uuid) : !excludedNames.has(inventoryTrackerComparableName(row?.name));

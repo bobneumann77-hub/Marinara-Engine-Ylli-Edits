@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { Backpack, Lock, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Backpack, Lock, Star, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
   normalizeInventoryTrackerName,
@@ -58,11 +58,13 @@ type InventoryGroupProps = {
   label: string;
   rows: InventoryTrackerRow[];
   onUpdate: (rows: InventoryTrackerRow[]) => void;
+  /** Present on the two carried groups: hands the row to the other one, uuid intact. */
+  onMoveTo?: (index: number, to: InventoryTrackerGroup) => void;
   deleteMode: boolean;
   addMode: boolean;
 };
 
-function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: InventoryGroupProps) {
+function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, addMode }: InventoryGroupProps) {
   const { t: localizeUi } = useUiTranslation();
   const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
   // A row being created is a DRAFT: it lives here, not in the store, so the save
@@ -161,13 +163,40 @@ function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: I
           const showQuantity = quantity > 1 || addMode || lockMode;
           const nameLocked = isTrackerFieldLocked(fieldLocks, nameKey);
           const qtyLocked = isTrackerFieldLocked(fieldLocks, qtyKey);
-          const showDetails = !!row.description || !!row.location || addMode || lockMode;
+          // A detail field with nothing in it is not drawn at all. The old layout
+          // rendered both lines whenever either had a value and used the label itself
+          // as the empty placeholder, so an untouched Location read like one ("Location:
+          // Location"). They stay reachable in the panel's editing modes, where an empty
+          // field is the point.
+          // flair and isUnique are projection output the shared row type does not declare
+          // (it keeps name/qty/description/location), but the panel edits the row it was
+          // handed, so they ride along on every write.
+          const richRow = row as InventoryTrackerRow & { flair?: string; isUnique?: boolean };
+          const flair = richRow.flair ?? "";
+          // Currencies have nowhere to be worn, so only the carried groups move.
+          const moveTarget: InventoryTrackerGroup | null =
+            group === "inventory" ? "equipped" : group === "equipped" ? "inventory" : null;
+          const moveLabel = moveTarget
+            ? localizeUi(
+                moveTarget === "equipped"
+                  ? "ui.trackerPanel.inventoryTracker.equipItem"
+                  : "ui.trackerPanel.inventoryTracker.unequipItem",
+                { item: row.name },
+              )
+            : "";
+          const detailFields = (["description", "location"] as const).filter(
+            (field) => addMode || lockMode || !!row[field],
+          );
+          const showDetails = detailFields.length > 0 || !!flair;
           return (
             <div
               key={`${row.name}-${index}`}
               className={cn(
                 "mari-chrome-tag flex min-h-6 min-w-0 max-w-full flex-col justify-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7",
                 showDetails && "w-full py-1",
+                // Secondary cue only: on a dark chip a brighter rule reads as a rumor, so
+                // the star beside the name is the visible tell.
+                richRow.isUnique === true && "border-[color-mix(in_srgb,var(--tracker-profile-text)_60%,transparent)]",
               )}
             >
               <div className="flex min-w-0 items-center gap-1">
@@ -186,6 +215,13 @@ function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: I
                   lockMode={lockMode}
                   onToggleLock={() => onToggleFieldLock?.(nameKey)}
                 />
+                {/* The one stack trait that changes what the item IS, marked where the
+                    eye already is. Static for now -- favouriting is a later interaction. */}
+                {richRow.isUnique === true && (
+                  <span className="shrink-0" title={localizeUi("ui.trackerPanel.inventoryTracker.uniqueItem")}>
+                    <Star size="0.5rem" className="mari-rgb-static-icon block text-current" aria-hidden="true" />
+                  </span>
+                )}
                 {showQuantity && (
                   <span className="flex shrink-0 items-center gap-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
                     {qtyLocked && LOCK_GLYPH}
@@ -202,6 +238,21 @@ function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: I
                     />
                   </span>
                 )}
+                {moveTarget && onMoveTo && (
+                  <button
+                    type="button"
+                    onClick={() => onMoveTo(index, moveTarget)}
+                    className="mari-chrome-tag grid h-4 w-4 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
+                    title={moveLabel}
+                    aria-label={moveLabel}
+                  >
+                    {moveTarget === "equipped" ? (
+                      <ArrowUp size="0.5625rem" className="mari-rgb-static-icon block text-current" />
+                    ) : (
+                      <ArrowDown size="0.5625rem" className="mari-rgb-static-icon block text-current" />
+                    )}
+                  </button>
+                )}
                 {deleteMode && (
                   <button
                     type="button"
@@ -216,7 +267,25 @@ function InventoryGroup({ group, label, rows, onUpdate, deleteMode, addMode }: I
               </div>
               {showDetails && (
                 <div className="space-y-1 border-t border-[var(--tracker-profile-slot-rule)]/40 pt-1">
-                  {(["description", "location"] as const).map((field) => {
+                  {/* Flair has no lock key in the shared lock vocabulary, so it renders
+                      without the padlock affordance rather than pretending to support it. */}
+                  {(!!flair || addMode || lockMode) && (
+                    <div className="flex min-w-0 items-start gap-1 text-[0.625rem]">
+                      <span className="shrink-0 py-0.5 text-[var(--muted-foreground)]">
+                        {localizeUi("ui.trackerPanel.inventoryTracker.flair")}:
+                      </span>
+                      <InlineEdit
+                        value={flair}
+                        onSave={(value) => updateRow(index, { ...richRow, flair: value } as InventoryTrackerRow)}
+                        placeholder={localizeUi("ui.trackerPanel.inventoryTracker.flair")}
+                        ariaLabel={localizeUi("ui.trackerPanel.inventoryTracker.flairFor", { item: row.name })}
+                        className={cn("min-w-0 flex-1 px-0.5", LOCK_SURFACE_RESET)}
+                        previewLineCount={2}
+                        showEditHint={false}
+                      />
+                    </div>
+                  )}
+                  {detailFields.map((field) => {
                     const key = roleplayInventoryTrackerLockKey(group, row, field, index);
                     const locked = isTrackerFieldLocked(fieldLocks, key);
                     const label = localizeUi(`ui.trackerPanel.inventoryTracker.${field}`);
@@ -296,6 +365,21 @@ export function InventoryTrackerPanel({
   onToggleCollapsed?: () => void;
 }) {
   const { t: localizeUi } = useUiTranslation();
+  // A move is two writes, and the dossier's editor adapter is what makes them one
+  // move: the destination row carries the same uuid, so the source group's
+  // disappearance is an updated identity rather than a deletion. Both writes share
+  // one save burst (the queue keeps its first baseline), so the POST sees the
+  // finished state and never a half-moved row.
+  const moveRow = (from: InventoryTrackerGroup, index: number, to: InventoryTrackerGroup) => {
+    const fromRows = from === "equipped" ? equipped : inventory;
+    const toRows = to === "equipped" ? equipped : inventory;
+    const row = fromRows[index];
+    if (!row) return;
+    const setFrom = from === "equipped" ? onUpdateEquipped : onUpdateInventory;
+    const setTo = to === "equipped" ? onUpdateEquipped : onUpdateInventory;
+    setFrom(fromRows.filter((_, rowIndex) => rowIndex !== index));
+    setTo([...toRows, row]);
+  };
   return (
     // Own the query container rather than inheriting one. The docked sidebar provides
     // `@container`, but the HUD popover is portaled to document.body and has none — so
@@ -331,6 +415,7 @@ export function InventoryTrackerPanel({
               label={localizeUi("ui.trackerPanel.inventoryTracker.equipped")}
               rows={equipped}
               onUpdate={onUpdateEquipped}
+              onMoveTo={(index, to) => moveRow("equipped", index, to)}
               deleteMode={deleteMode}
               addMode={addMode}
             />
@@ -339,6 +424,7 @@ export function InventoryTrackerPanel({
               label={localizeUi("ui.trackerPanel.inventoryTracker.inventory")}
               rows={inventory}
               onUpdate={onUpdateInventory}
+              onMoveTo={(index, to) => moveRow("inventory", index, to)}
               deleteMode={deleteMode}
               addMode={addMode}
             />
