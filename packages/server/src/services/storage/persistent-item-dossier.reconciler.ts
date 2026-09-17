@@ -65,6 +65,13 @@ export interface DossierAgentRow {
    * `playerStats` is a projection, so re-reading it resurrects dropped items.
    */
   seededFromPlayerStats?: boolean;
+  /**
+   * Engine-internal: set by the editor adapter on the rows it forwards (not on
+   * removals). An editor row always states its flair -- empty included -- so
+   * findStack matches such rows strictly by flair: a bare new draft beside a
+   * flavored pile mints its own stack instead of overwriting that pile's flair.
+   */
+  editorSourced?: boolean;
 }
 
 /** Host-supplied context. Never read from model output. */
@@ -304,6 +311,15 @@ function findStack(
   if (flairKey) {
     const byFlair = dossier.stacks.find((s) => scoped(s) && canonicalName(s.flair ?? "") === flairKey);
     if (byFlair) return byFlair;
+  }
+  if (row.editorSourced) {
+    // An editor row ALWAYS states its flair (empty included), so an empty flair
+    // is a statement, not an omission: a bare new draft beside a flavored pile
+    // must mint its own stack, not overwrite that pile's flair. Match only a
+    // stack whose flair equals the row's; otherwise the row mints. Agent rows
+    // keep the name fallback -- agents omit flair constantly, and a match
+    // requirement there would mint twins on ordinary updates.
+    return dossier.stacks.find((s) => scoped(s) && canonicalName(s.flair ?? "") === flairKey);
   }
   return dossier.stacks.find(scoped);
 }

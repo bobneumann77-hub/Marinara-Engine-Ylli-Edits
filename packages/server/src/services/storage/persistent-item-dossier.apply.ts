@@ -193,6 +193,7 @@ export function buildDossierRowsFromEditorRows(
       rows.push({
         name,
         type,
+        editorSourced: true,
         ...(uuid ? { uuid } : {}),
         ...(typeof row.qty === "number" && Number.isFinite(row.qty) ? { qty: Math.max(0, Math.floor(row.qty)) } : {}),
         flair: editorClearableText(row.flair),

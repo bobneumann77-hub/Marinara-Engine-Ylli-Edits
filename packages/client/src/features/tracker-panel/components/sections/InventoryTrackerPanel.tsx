@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Backpack, Lock, Star, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
@@ -61,10 +61,30 @@ type InventoryGroupProps = {
   /** Present on the two carried groups: hands the row to the other one, uuid intact. */
   onMoveTo?: (index: number, to: InventoryTrackerGroup) => void;
   deleteMode: boolean;
+  /**
+   * Draws empty detail fields -- "I am editing structure right now". A single row can
+   * also reveal its own empty fields by being clicked, without the panel entering a mode.
+   */
   addMode: boolean;
+  /**
+   * Draws the group's + button. Split from `addMode` because they answer different
+   * questions: "may I add a row" versus "am I editing structure". The HUD popover always
+   * allows adding but should never open in a structural mode, and one shared prop used to
+   * force both.
+   */
+  allowAdd: boolean;
 };
 
-function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, addMode }: InventoryGroupProps) {
+function InventoryGroup({
+  group,
+  label,
+  rows,
+  onUpdate,
+  onMoveTo,
+  deleteMode,
+  addMode,
+  allowAdd,
+}: InventoryGroupProps) {
   const { t: localizeUi } = useUiTranslation();
   const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
   // A row being created is a DRAFT: it lives here, not in the store, so the save
@@ -75,6 +95,19 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
   // so a blur racing an Enter cannot commit the same row twice.
   const [draftName, setDraftName] = useState<string | null>(null);
   const draftRef = useRef<string | null>(null);
+  // Flair is identity's second half (the save matcher's flair tier), so the draft
+  // carries it too -- otherwise a flavored pile could never be created beside a
+  // bare one, because the flair was always empty at commit time.
+  const [draftFlair, setDraftFlair] = useState("");
+  const draftFlairRef = useRef("");
+  // Qty is the third bare field -- the most an item needs at birth. A number the
+  // user never touched reads as 1, so the input can stay empty while typing.
+  const [draftQty, setDraftQty] = useState("");
+  const draftQtyRef = useRef("");
+  // A row reveals its own empty fields when its chrome is clicked. Component state, one
+  // row at a time, and deliberately not stored: a reveal is a view concern, so nothing
+  // about it can reach a payload.
+  const [revealedIndex, setRevealedIndex] = useState<number | null>(null);
 
   const openDraft = () => {
     if (draftRef.current !== null) return;
@@ -88,20 +121,79 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
     setDraftName(value);
   };
 
+  const updateDraftFlair = (value: string) => {
+    draftFlairRef.current = value;
+    setDraftFlair(value);
+  };
+
+  const updateDraftQty = (value: string) => {
+    // Digits only -- the qty input is a count, not an expression.
+    const digits = value.replace(/[^0-9]/g, "");
+    draftQtyRef.current = digits;
+    setDraftQty(digits);
+  };
+
   const cancelDraft = () => {
     draftRef.current = null;
+    draftFlairRef.current = "";
+    draftQtyRef.current = "";
     setDraftName(null);
+    setDraftFlair("");
+    setDraftQty("");
   };
 
   const commitDraft = () => {
     if (draftRef.current === null) return;
     const name = draftRef.current.trim();
+    const flair = draftFlairRef.current.trim();
+    const qtyValue = draftQtyRef.current.trim();
+    // An untouched or non-numeric qty is 1; a typed one is the item's stated total.
+    const parsedQty = Number.parseInt(qtyValue, 10);
+    const qty = Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 1;
     draftRef.current = null;
+    draftFlairRef.current = "";
+    draftQtyRef.current = "";
     setDraftName(null);
+    setDraftFlair("");
+    setDraftQty("");
+    setRevealedIndex(null);
     if (!name) return;
-    // The definition is minted from THIS row, so it carries the name actually
-    // typed -- which is the whole point of holding it back until now.
-    onUpdate([...rows, { name }]);
+    // Merge-on-commit: a draft whose name AND flair match exactly one pile in
+    // this group adds to that pile instead of posting a qty-less row the server
+    // silently absorbs (the new stack used to just vanish). The posted value is
+    // a stated TOTAL, never a delta -- same contract the agent path uses.
+    // Guards: never merge into a unique (a second one is a new pile, not a +1),
+    // and never on ambiguity -- two candidates pair nothing, so the draft posts
+    // as its own row and the server decides. A different flair is never merged:
+    // flair divides identity, and the server mints it as its own pile.
+    const draftNameKey = normalizeInventoryTrackerName(name);
+    const draftFlairKey = normalizeInventoryTrackerName(flair);
+    const matches = rows.filter((candidate) => {
+      const rich = candidate as InventoryTrackerRow & { flair?: string; isUnique: boolean };
+      return (
+        rich.isUnique !== true &&
+        normalizeInventoryTrackerName(candidate.name) === draftNameKey &&
+        normalizeInventoryTrackerName(rich.flair ?? "") === draftFlairKey
+      );
+    });
+    if (matches.length === 1) {
+      const index = rows.indexOf(matches[0]!);
+      const next = [...rows];
+      next[index] = { ...matches[0]!, qty: (matches[0]!.qty ?? 1) + qty };
+      onUpdate(next);
+      return;
+    }
+    // The definition is minted from THIS row, so it carries the name (and flair)
+    // actually typed -- which is the whole point of holding it back until now.
+    onUpdate([...rows, { name, qty, ...(flair ? { flair } : {}) }]);
+  };
+  // A blur inside the chip is focus MOVING, not leaving: tabbing from the name
+  // to the flair must not commit a half-typed draft. The container is focusable
+  // (tabIndex -1) so a click on the pill itself also lands inside it. Commit
+  // only when focus left the chip entirely.
+  const commitDraftOnBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return;
+    commitDraft();
   };
   const updateRow = (index: number, row: InventoryTrackerRow) => {
     const previous = rows[index];
@@ -128,6 +220,7 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
     onUpdateFieldLocks?.((locks) =>
       removeTrackerFieldLockPrefix(locks, roleplayInventoryTrackerRowLockPrefix(group, rows[index]!, index)),
     );
+    setRevealedIndex(null);
     onUpdate(rows.filter((_, rowIndex) => rowIndex !== index));
   };
 
@@ -137,7 +230,7 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
         <span className="truncate text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
           {label}
         </span>
-        {addMode && (
+        {allowAdd && (
           <AddRowButton
             title={localizeUi("ui.trackerPanel.inventoryTracker.addToGroup", { group: label })}
             onClick={openDraft}
@@ -160,7 +253,9 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
           // information, so it is hidden — but it still has to be reachable when the user
           // is deliberately editing structure or pinning values, or a qty-1 row could
           // never be raised or locked.
-          const showQuantity = quantity > 1 || addMode || lockMode;
+          const revealed = revealedIndex === index;
+          const editingFields = addMode || lockMode || revealed;
+          const showQuantity = quantity > 1 || editingFields;
           const nameLocked = isTrackerFieldLocked(fieldLocks, nameKey);
           const qtyLocked = isTrackerFieldLocked(fieldLocks, qtyKey);
           // A detail field with nothing in it is not drawn at all. The old layout
@@ -184,13 +279,20 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
                 { item: row.name },
               )
             : "";
-          const detailFields = (["description", "location"] as const).filter(
-            (field) => addMode || lockMode || !!row[field],
-          );
+          const detailFields = (["description", "location"] as const).filter((field) => editingFields || !!row[field]);
           const showDetails = detailFields.length > 0 || !!flair;
           return (
             <div
               key={`${row.name}-${index}`}
+              onClick={(event) => {
+                // The whole pill is the reveal trigger, not just the header line: a
+                // collapsed bare pill is almost entirely the name's InlineEdit button,
+                // so a header-only target left nothing to click. Buttons and inputs
+                // own their clicks -- equip, delete and field editing stay one click --
+                // and the reveal only decides whether empty fields are drawn.
+                if ((event.target as HTMLElement).closest("button, input, textarea")) return;
+                setRevealedIndex((current) => (current === index ? null : index));
+              }}
               className={cn(
                 "mari-chrome-tag flex min-h-6 min-w-0 max-w-full flex-col justify-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7",
                 showDetails && "w-full py-1",
@@ -215,61 +317,66 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
                   lockMode={lockMode}
                   onToggleLock={() => onToggleFieldLock?.(nameKey)}
                 />
-                {/* The one stack trait that changes what the item IS, marked where the
-                    eye already is. Static for now -- favouriting is a later interaction. */}
-                {richRow.isUnique === true && (
-                  <span className="shrink-0" title={localizeUi("ui.trackerPanel.inventoryTracker.uniqueItem")}>
-                    <Star size="0.5rem" className="mari-rgb-static-icon block text-current" aria-hidden="true" />
-                  </span>
-                )}
-                {showQuantity && (
-                  <span className="flex shrink-0 items-center gap-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                    {qtyLocked && LOCK_GLYPH}
-                    <span aria-hidden="true">×</span>
-                    <InlineNumber
-                      value={quantity}
-                      min={1}
-                      onChange={(qty) => updateRow(index, { ...row, qty: qty > 1 ? qty : undefined })}
-                      className={cn("px-0 text-right text-[0.625rem] tabular-nums", LOCK_SURFACE_RESET)}
-                      title={localizeUi("ui.trackerPanel.inventoryTracker.quantityFor", { item: row.name })}
-                      locked={qtyLocked}
-                      lockMode={lockMode}
-                      onToggleLock={() => onToggleFieldLock?.(qtyKey)}
-                    />
-                  </span>
-                )}
-                {moveTarget && onMoveTo && (
-                  <button
-                    type="button"
-                    onClick={() => onMoveTo(index, moveTarget)}
-                    className="mari-chrome-tag grid h-4 w-4 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
-                    title={moveLabel}
-                    aria-label={moveLabel}
-                  >
-                    {moveTarget === "equipped" ? (
-                      <ArrowUp size="0.5625rem" className="mari-rgb-static-icon block text-current" />
-                    ) : (
-                      <ArrowDown size="0.5625rem" className="mari-rgb-static-icon block text-current" />
-                    )}
-                  </button>
-                )}
-                {deleteMode && (
-                  <button
-                    type="button"
-                    onClick={() => removeRow(index)}
-                    className="mari-chrome-tag grid h-4 w-4 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
-                    title={localizeUi("ui.trackerPanel.inventoryTracker.removeItem", { item: row.name })}
-                    aria-label={localizeUi("ui.trackerPanel.inventoryTracker.removeItem", { item: row.name })}
-                  >
-                    <X size="0.5625rem" className="mari-rgb-static-icon block text-current" />
-                  </button>
-                )}
+                {/* The name flexes on the left; everything else collects at the right edge
+                    in one cluster, so a long name cannot push the buttons around. The star
+                    is the visible tell that this pile is one of a kind (the brighter border
+                    is only a secondary cue). Static for now -- favouriting is a later
+                    interaction. */}
+                <span className="ml-auto flex shrink-0 items-center gap-1">
+                  {richRow.isUnique === true && (
+                    <span className="shrink-0" title={localizeUi("ui.trackerPanel.inventoryTracker.uniqueItem")}>
+                      <Star size="0.5rem" className="mari-rgb-static-icon block text-current" aria-hidden="true" />
+                    </span>
+                  )}
+                  {showQuantity && (
+                    <span className="flex shrink-0 items-center gap-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+                      {qtyLocked && LOCK_GLYPH}
+                      <span aria-hidden="true">×</span>
+                      <InlineNumber
+                        value={quantity}
+                        min={1}
+                        onChange={(qty) => updateRow(index, { ...row, qty: qty > 1 ? qty : undefined })}
+                        className={cn("px-0 text-right text-[0.625rem] tabular-nums", LOCK_SURFACE_RESET)}
+                        title={localizeUi("ui.trackerPanel.inventoryTracker.quantityFor", { item: row.name })}
+                        locked={qtyLocked}
+                        lockMode={lockMode}
+                        onToggleLock={() => onToggleFieldLock?.(qtyKey)}
+                      />
+                    </span>
+                  )}
+                  {moveTarget && onMoveTo && (
+                    <button
+                      type="button"
+                      onClick={() => onMoveTo(index, moveTarget)}
+                      className="mari-chrome-tag grid h-4 w-4 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
+                      title={moveLabel}
+                      aria-label={moveLabel}
+                    >
+                      {moveTarget === "equipped" ? (
+                        <ArrowUp size="0.5625rem" className="mari-rgb-static-icon block text-current" />
+                      ) : (
+                        <ArrowDown size="0.5625rem" className="mari-rgb-static-icon block text-current" />
+                      )}
+                    </button>
+                  )}
+                  {deleteMode && (
+                    <button
+                      type="button"
+                      onClick={() => removeRow(index)}
+                      className="mari-chrome-tag grid h-4 w-4 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
+                      title={localizeUi("ui.trackerPanel.inventoryTracker.removeItem", { item: row.name })}
+                      aria-label={localizeUi("ui.trackerPanel.inventoryTracker.removeItem", { item: row.name })}
+                    >
+                      <X size="0.5625rem" className="mari-rgb-static-icon block text-current" />
+                    </button>
+                  )}
+                </span>
               </div>
               {showDetails && (
                 <div className="space-y-1 border-t border-[var(--tracker-profile-slot-rule)]/40 pt-1">
                   {/* Flair has no lock key in the shared lock vocabulary, so it renders
                       without the padlock affordance rather than pretending to support it. */}
-                  {(!!flair || addMode || lockMode) && (
+                  {(!!flair || editingFields) && (
                     <div className="flex min-w-0 items-start gap-1 text-[0.625rem]">
                       <span className="shrink-0 py-0.5 text-[var(--muted-foreground)]">
                         {localizeUi("ui.trackerPanel.inventoryTracker.flair")}:
@@ -314,7 +421,11 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
           );
         })}
         {draftName !== null && (
-          <div className="mari-chrome-tag flex min-h-6 min-w-0 max-w-full items-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 py-1 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7">
+          <div
+            tabIndex={-1}
+            className="mari-chrome-tag flex min-h-6 min-w-0 max-w-full items-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 py-1 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7"
+            onBlur={commitDraftOnBlur}
+          >
             <input
               autoFocus
               value={draftName}
@@ -325,7 +436,29 @@ function InventoryGroup({ group, label, rows, onUpdate, onMoveTo, deleteMode, ad
                 if (event.key === "Enter") commitDraft();
                 if (event.key === "Escape") cancelDraft();
               }}
-              onBlur={commitDraft}
+              className="min-w-0 flex-1 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-[0.625rem] text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30"
+            />
+            <input
+              value={draftQty}
+              placeholder="1"
+              inputMode="numeric"
+              aria-label={localizeUi("ui.trackerPanel.inventoryTracker.qty")}
+              onChange={(event) => updateDraftQty(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitDraft();
+                if (event.key === "Escape") cancelDraft();
+              }}
+              className="w-10 shrink-0 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-center text-[0.625rem] text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30"
+            />
+            <input
+              value={draftFlair}
+              placeholder={localizeUi("ui.trackerPanel.inventoryTracker.flair")}
+              aria-label={localizeUi("ui.trackerPanel.inventoryTracker.flair")}
+              onChange={(event) => updateDraftFlair(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitDraft();
+                if (event.key === "Escape") cancelDraft();
+              }}
               className="min-w-0 flex-1 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-[0.625rem] text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30"
             />
           </div>
@@ -344,7 +477,8 @@ export function InventoryTrackerPanel({
   onUpdateEquipped,
   onUpdateInventory,
   deleteMode,
-  addMode,
+  addMode = false,
+  allowAdd,
   header,
   plain = false,
   collapsed = false,
@@ -358,13 +492,19 @@ export function InventoryTrackerPanel({
   onUpdateEquipped: (rows: InventoryTrackerRow[]) => void;
   onUpdateInventory: (rows: InventoryTrackerRow[]) => void;
   deleteMode: boolean;
-  addMode: boolean;
+  addMode?: boolean;
+  /** Draws + without forcing the panel into a structural editing mode. Falls back to `addMode`. */
+  allowAdd?: boolean;
   header?: ReactNode;
   plain?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
   const { t: localizeUi } = useUiTranslation();
+  // Adding and editing structure are separate affordances: a surface that only wants the +
+  // button (the HUD popover) passes `allowAdd` and leaves `addMode` off, so its rows stop
+  // drawing every empty field. Callers that pass only `addMode` behave exactly as before.
+  const canAdd = allowAdd ?? addMode;
   // A move is two writes, and the dossier's editor adapter is what makes them one
   // move: the destination row carries the same uuid, so the source group's
   // disappearance is an updated identity rather than a deletion. Both writes share
@@ -409,6 +549,7 @@ export function InventoryTrackerPanel({
               onUpdate={onUpdateCurrencies}
               deleteMode={deleteMode}
               addMode={addMode}
+              allowAdd={canAdd}
             />
             <InventoryGroup
               group="equipped"
@@ -418,6 +559,7 @@ export function InventoryTrackerPanel({
               onMoveTo={(index, to) => moveRow("equipped", index, to)}
               deleteMode={deleteMode}
               addMode={addMode}
+              allowAdd={canAdd}
             />
             <InventoryGroup
               group="inventory"
@@ -427,6 +569,7 @@ export function InventoryTrackerPanel({
               onMoveTo={(index, to) => moveRow("inventory", index, to)}
               deleteMode={deleteMode}
               addMode={addMode}
+              allowAdd={canAdd}
             />
           </div>
         )}

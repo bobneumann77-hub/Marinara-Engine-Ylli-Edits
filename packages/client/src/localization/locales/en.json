@@ -10267,6 +10267,7 @@
   "ui.trackerPanel.inventoryTracker.location": "Location",
   "ui.trackerPanel.inventoryTracker.locationFor": "Location for {{item}}",
   "ui.trackerPanel.inventoryTracker.newItem": "New item",
+  "ui.trackerPanel.inventoryTracker.qty": "Quantity",
   "ui.trackerPanel.inventoryTracker.quantityFor": "Quantity for {{item}}",
   "ui.trackerPanel.inventoryTracker.removeItem": "Remove {{item}}",
   "ui.trackerPanel.inventoryTracker.title": "Inventory",
