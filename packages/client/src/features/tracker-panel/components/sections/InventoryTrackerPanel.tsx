@@ -1,5 +1,5 @@
 import { useRef, useState, type FocusEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Backpack, Lock, Star, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Backpack, Lock, RotateCcw, Star, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
   normalizeInventoryTrackerName,
@@ -320,13 +320,46 @@ function InventoryGroup({
                 {/* The name flexes on the left; everything else collects at the right edge
                     in one cluster, so a long name cannot push the buttons around. The star
                     is the visible tell that this pile is one of a kind (the brighter border
-                    is only a secondary cue). Static for now -- favouriting is a later
-                    interaction. */}
+                    is only a secondary cue). A unique always shows it filled; a row whose
+                    fields are revealed shows the outline on everything else, so the toggle
+                    is reachable without the panel entering a mode. */}
                 <span className="ml-auto flex shrink-0 items-center gap-1">
-                  {richRow.isUnique === true && (
-                    <span className="shrink-0" title={localizeUi("ui.trackerPanel.inventoryTracker.uniqueItem")}>
-                      <Star size="0.5rem" className="mari-rgb-static-icon block text-current" aria-hidden="true" />
-                    </span>
+                  {(richRow.isUnique === true || editingFields) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Stating isUnique on also states qty 1, because a unique is one
+                        // instance -- the same thing the server writes for a stated
+                        // isUnique. The optimistic row then matches the response instead of
+                        // showing a quantity that changes a beat later.
+                        const makingUnique = richRow.isUnique !== true;
+                        updateRow(index, {
+                          ...row,
+                          isUnique: makingUnique,
+                          ...(makingUnique ? { qty: 1 } : {}),
+                        } as InventoryTrackerRow);
+                      }}
+                      className="mari-chrome-tag grid h-3.5 w-3.5 shrink-0 place-items-center p-0 leading-none text-current transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
+                      title={localizeUi(
+                        richRow.isUnique === true
+                          ? "ui.trackerPanel.inventoryTracker.unmarkUniqueItem"
+                          : "ui.trackerPanel.inventoryTracker.markUniqueItem",
+                        { item: row.name },
+                      )}
+                      aria-label={localizeUi(
+                        richRow.isUnique === true
+                          ? "ui.trackerPanel.inventoryTracker.unmarkUniqueItem"
+                          : "ui.trackerPanel.inventoryTracker.markUniqueItem",
+                        { item: row.name },
+                      )}
+                    >
+                      <Star
+                        size="0.5rem"
+                        fill={richRow.isUnique === true ? "currentColor" : "none"}
+                        className="mari-rgb-static-icon block text-current"
+                        aria-hidden="true"
+                      />
+                    </button>
                   )}
                   {showQuantity && (
                     <span className="flex shrink-0 items-center gap-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
@@ -412,6 +445,30 @@ function InventoryGroup({
                           lockMode={lockMode}
                           onToggleLock={() => onToggleFieldLock?.(key)}
                         />
+                        {field === "description" && editingFields && (
+                          // Description resolves as override ?? item type, and the projection hands
+                          // the panel the already-resolved value -- so this control cannot tell an
+                          // override from the item type's own line, and it appears with the row's
+                          // other editing affordances. Clicking it on an inherited value is a
+                          // harmless no-op. null is the one value that drops the override so the
+                          // item type shows again; "" would instead keep an empty override and
+                          // suppress it. The cast below is needed because
+                          // InventoryTrackerRow declares the four display fields only; null here is the
+                          // runtime revert signal, not a widened shared type.
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateRow(index, { ...row, description: null } as unknown as InventoryTrackerRow)
+                            }
+                            className="mari-chrome-tag grid h-3.5 w-3.5 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
+                            title={localizeUi("ui.trackerPanel.inventoryTracker.revertToItemType", { item: row.name })}
+                            aria-label={localizeUi("ui.trackerPanel.inventoryTracker.revertToItemType", {
+                              item: row.name,
+                            })}
+                          >
+                            <RotateCcw size="0.5rem" className="mari-rgb-static-icon block text-current" />
+                          </button>
+                        )}
                       </div>
                     );
                   })}

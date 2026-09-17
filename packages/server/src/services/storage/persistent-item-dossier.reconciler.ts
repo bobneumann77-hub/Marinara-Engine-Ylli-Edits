@@ -129,11 +129,19 @@ function pluralKeyVariants(key: string): string[] {
   return [...out];
 }
 
-/** Stack override wins; the shared definition is the fallback. */
+/**
+ * The name a stack answers to. Mirrors the projection's precedence exactly, so the
+ * name shown is the name that matches. A rename override lives in `displayName`
+ * (`name` is the older field and reads null on anything minted since), and reading
+ * it here is what stops a renamed pile from still answering to its definition's
+ * name -- otherwise a new row named "Pen" merges into the pile you renamed to
+ * "Old pen", and the two can never be told apart.
+ */
 function resolvedStackName(stack: DossierStack, dossier: PersistentItemDossier): string {
+  if (stack.displayName) return stack.displayName;
   if (stack.name) return stack.name;
   const definition = dossier.definitions.find((d) => d.id === stack.definitionId);
-  return definition?.name ?? "";
+  return definition?.displayName ?? definition?.name ?? "";
 }
 
 /** Owner spellings that always mean "the player persona". */
