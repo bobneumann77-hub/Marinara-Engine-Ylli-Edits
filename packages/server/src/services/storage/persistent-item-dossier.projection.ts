@@ -89,6 +89,21 @@ function projectStack(stack: DossierStack, definition: DossierDefinition | undef
   const location = optionalText(stack.locationText);
   if (location) row.location = location;
   if (stack.isUnique) row.isUnique = true;
+  // The item TYPE's own values, beside the resolved ones above. A row carries
+  // `override ?? definition`, so without this the panel cannot tell what the type
+  // itself says -- which is what the name field's placeholder and an honest
+  // "revert to the item type (<type>)" label both read. Omitted when the
+  // definition is missing, so a row always means "no type known" when absent.
+  if (definition) {
+    const typeRow: Record<string, unknown> = { name: definition.displayName ?? definition.name ?? "" };
+    const typeDescription = optionalText(definition.description);
+    const typeClass = optionalText(definition.class);
+    const typeRarity = optionalText(definition.rarity);
+    if (typeDescription) typeRow.description = typeDescription;
+    if (typeClass) typeRow.class = typeClass;
+    if (typeRarity) typeRow.rarity = typeRarity;
+    row.definition = typeRow;
+  }
   return row;
 }
 

@@ -1,5 +1,5 @@
 import { useRef, useState, type FocusEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Backpack, Lock, RotateCcw, Star, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Backpack, Lock, Maximize2, Minimize2, RotateCcw, Star, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
   normalizeInventoryTrackerName,
@@ -73,6 +73,8 @@ type InventoryGroupProps = {
    * force both.
    */
   allowAdd: boolean;
+  /** Minimal UI: every row collapses to its pill and no row may expand. */
+  minimal: boolean;
 };
 
 function InventoryGroup({
@@ -84,6 +86,7 @@ function InventoryGroup({
   deleteMode,
   addMode,
   allowAdd,
+  minimal,
 }: InventoryGroupProps) {
   const { t: localizeUi } = useUiTranslation();
   const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
@@ -169,10 +172,18 @@ function InventoryGroup({
     const draftNameKey = normalizeInventoryTrackerName(name);
     const draftFlairKey = normalizeInventoryTrackerName(flair);
     const matches = rows.filter((candidate) => {
-      const rich = candidate as InventoryTrackerRow & { flair?: string; isUnique: boolean };
+      const rich = candidate as InventoryTrackerRow & {
+        flair?: string;
+        isUnique: boolean;
+        definition?: { name?: string };
+      };
+      // A cleared name stores an empty override, so that pile's own name reads "". The
+      // server still matches it by its item type's name, so compare the same thing here
+      // -- otherwise a draft posts a stated total the server then absorbs.
+      const candidateName = candidate.name || rich.definition?.name || "";
       return (
         rich.isUnique !== true &&
-        normalizeInventoryTrackerName(candidate.name) === draftNameKey &&
+        normalizeInventoryTrackerName(candidateName) === draftNameKey &&
         normalizeInventoryTrackerName(rich.flair ?? "") === draftFlairKey
       );
     });
@@ -225,7 +236,7 @@ function InventoryGroup({
   };
 
   return (
-    <div className="min-w-0 border-b border-[var(--border)]/25 p-1.5 last:border-0">
+    <div className="relative min-w-0 border-b border-[var(--border)]/25 p-1.5 last:border-0">
       <div className="mb-1 flex min-h-6 items-center justify-between gap-1 px-0.5">
         <span className="truncate text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
           {label}
@@ -238,6 +249,20 @@ function InventoryGroup({
           />
         )}
       </div>
+      {/* Draft dismissal shield. While a draft is open the rest of the group is covered,
+          so the FIRST tap outside the chip only dismisses it and never reaches the row
+          underneath (tapping another item used to commit AND expand it in one gesture).
+          preventDefault on mousedown keeps focus in the chip, so the dismissal happens
+          here instead of as a blur, and the click that caused it cannot leak through.
+          The chip itself sits above this layer. */}
+      {draftName !== null && (
+        <div
+          className="absolute inset-0 z-20"
+          aria-hidden="true"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={commitDraft}
+        />
+      )}
       {/* Chips wrap at every width. A narrow panel does get a ragged right edge, but the
           stacked fallback stretched each chip to the full row, which read as a list of
           buttons rather than as the item pills the wide layout shows. */}
@@ -253,9 +278,12 @@ function InventoryGroup({
           // information, so it is hidden — but it still has to be reachable when the user
           // is deliberately editing structure or pinning values, or a qty-1 row could
           // never be raised or locked.
-          const revealed = revealedIndex === index;
-          const editingFields = addMode || lockMode || revealed;
-          const showQuantity = quantity > 1 || editingFields;
+          // Minimal UI wins over every other way of opening a row: it is a deliberate
+          // "show me only the items" mode, so the reveal, the panel's editing modes and
+          // the empty-field drawing are all suppressed together.
+          const revealed = !minimal && revealedIndex === index;
+          const editingFields = !minimal && (addMode || lockMode || revealed);
+          const showQuantity = quantity > 1 || editingFields || minimal;
           const nameLocked = isTrackerFieldLocked(fieldLocks, nameKey);
           const qtyLocked = isTrackerFieldLocked(fieldLocks, qtyKey);
           // A detail field with nothing in it is not drawn at all. The old layout
@@ -263,10 +291,17 @@ function InventoryGroup({
           // as the empty placeholder, so an untouched Location read like one ("Location:
           // Location"). They stay reachable in the panel's editing modes, where an empty
           // field is the point.
-          // flair and isUnique are projection output the shared row type does not declare
-          // (it keeps name/qty/description/location), but the panel edits the row it was
-          // handed, so they ride along on every write.
-          const richRow = row as InventoryTrackerRow & { flair?: string; isUnique?: boolean };
+          // flair, isUnique and definition are projection output the shared row type does
+          // not declare (it keeps name/qty/description/location), but the panel edits the
+          // row it was handed, so they ride along on every write. `definition` is the item
+          // TYPE's own values: `name` and `description` above are already resolved as
+          // override ?? type, so without it the panel cannot say what the type itself is
+          // called -- which is what the name placeholder and the revert label print.
+          const richRow = row as InventoryTrackerRow & {
+            flair?: string;
+            isUnique?: boolean;
+            definition?: { name?: string; description?: string; class?: string; rarity?: string };
+          };
           const flair = richRow.flair ?? "";
           // Currencies have nowhere to be worn, so only the carried groups move.
           const moveTarget: InventoryTrackerGroup | null =
@@ -279,8 +314,20 @@ function InventoryGroup({
                 { item: row.name },
               )
             : "";
-          const detailFields = (["description", "location"] as const).filter((field) => editingFields || !!row[field]);
-          const showDetails = detailFields.length > 0 || !!flair;
+          // Minimal UI hides EVERY detail line, filled or not: it is a "just the items"
+          // view. `editingFields || !!row[field]` kept any field that had a value, so the
+          // mode refused expansion but never actually collapsed anything.
+          const detailFields = minimal
+            ? []
+            : (["description", "location"] as const).filter((field) => editingFields || !!row[field]);
+          const showDetails = detailFields.length > 0 || (!minimal && !!flair);
+          // The revert chip only means something when there is a real override to drop: a
+          // description that differs from the item type's own line. It also needs the
+          // projected `definition` to know what to revert TO, so a row whose type could not
+          // be resolved keeps the control hidden rather than offering to clear a value it
+          // cannot restore.
+          const descriptionOverridden =
+            !!richRow.definition && !!row.description && row.description !== richRow.definition.description;
           return (
             <div
               key={`${row.name}-${index}`}
@@ -290,6 +337,7 @@ function InventoryGroup({
                 // so a header-only target left nothing to click. Buttons and inputs
                 // own their clicks -- equip, delete and field editing stay one click --
                 // and the reveal only decides whether empty fields are drawn.
+                if (minimal) return;
                 if ((event.target as HTMLElement).closest("button, input, textarea")) return;
                 setRevealedIndex((current) => (current === index ? null : index));
               }}
@@ -305,11 +353,25 @@ function InventoryGroup({
                 {nameLocked && LOCK_GLYPH}
                 <InlineEdit
                   value={row.name}
-                  onSave={(name) =>
-                    updateRow(index, { ...row, name: name || localizeUi("ui.trackerPanel.inventoryTracker.item") })
+                  onSave={(name) => {
+                    // An emptied name stays EMPTY. It used to be replaced with the item
+                    // type's name right here, so the field refilled itself the moment you
+                    // tapped out -- which reads as the system fighting you. Sending ""
+                    // stores an empty override, like the other fields do, and the type's
+                    // name still shows as the greyed placeholder below.
+                    updateRow(index, { ...row, name: name.trim() });
+                  }}
+                  placeholder={
+                    richRow.definition?.name
+                      ? localizeUi("ui.trackerPanel.inventoryTracker.typeHint", {
+                          item: richRow.definition.name,
+                        })
+                      : localizeUi("ui.trackerPanel.inventoryTracker.item")
                   }
-                  placeholder={localizeUi("ui.trackerPanel.inventoryTracker.item")}
-                  className={cn("min-w-0 px-0.5 text-[0.625rem] font-medium", LOCK_SURFACE_RESET)}
+                  // Content width with a floor, never the whole row: `flex-1` made every
+                  // field's edit target span the line, so the only place left to tap for
+                  // the reveal was the border.
+                  className={cn("w-fit max-w-full min-w-[4rem] px-0.5 text-[0.625rem] font-medium", LOCK_SURFACE_RESET)}
                   title={row.name}
                   showEditHint={false}
                   scrollOnHover
@@ -410,7 +472,7 @@ function InventoryGroup({
                   {/* Flair has no lock key in the shared lock vocabulary, so it renders
                       without the padlock affordance rather than pretending to support it. */}
                   {(!!flair || editingFields) && (
-                    <div className="flex min-w-0 items-start gap-1 text-[0.625rem]">
+                    <div className="flex min-w-0 items-center gap-1 text-[0.625rem]">
                       <span className="shrink-0 py-0.5 text-[var(--muted-foreground)]">
                         {localizeUi("ui.trackerPanel.inventoryTracker.flair")}:
                       </span>
@@ -419,7 +481,7 @@ function InventoryGroup({
                         onSave={(value) => updateRow(index, { ...richRow, flair: value } as InventoryTrackerRow)}
                         placeholder={localizeUi("ui.trackerPanel.inventoryTracker.flair")}
                         ariaLabel={localizeUi("ui.trackerPanel.inventoryTracker.flairFor", { item: row.name })}
-                        className={cn("min-w-0 flex-1 px-0.5", LOCK_SURFACE_RESET)}
+                        className={cn("min-h-[1.125rem] w-fit min-w-[3rem] max-w-full px-0.5", LOCK_SURFACE_RESET)}
                         previewLineCount={2}
                         showEditHint={false}
                       />
@@ -430,40 +492,49 @@ function InventoryGroup({
                     const locked = isTrackerFieldLocked(fieldLocks, key);
                     const label = localizeUi(`ui.trackerPanel.inventoryTracker.${field}`);
                     return (
-                      <div key={field} className="flex min-w-0 items-start gap-1 text-[0.625rem]">
+                      <div key={field} className="flex min-w-0 items-center gap-1 text-[0.625rem]">
                         <span className="shrink-0 py-0.5 text-[var(--muted-foreground)]">{label}:</span>
                         {locked && LOCK_GLYPH}
                         <InlineEdit
                           value={row[field] ?? ""}
                           onSave={(value) => updateRow(index, { ...row, [field]: value })}
-                          placeholder={label}
+                          // A field the stack emptied still shows what its item TYPE
+                          // carries, prefixed so it reads as the type's value and not as
+                          // something the row actually holds.
+                          placeholder={
+                            field === "description" && richRow.definition?.description
+                              ? localizeUi("ui.trackerPanel.inventoryTracker.typeHint", {
+                                  item: richRow.definition.description,
+                                })
+                              : label
+                          }
                           ariaLabel={localizeUi(`ui.trackerPanel.inventoryTracker.${field}For`, { item: row.name })}
-                          className={cn("min-w-0 flex-1 px-0.5", LOCK_SURFACE_RESET)}
+                          className={cn("min-h-[1.125rem] w-fit min-w-[3rem] max-w-full px-0.5", LOCK_SURFACE_RESET)}
                           previewLineCount={2}
                           showEditHint={false}
                           locked={locked}
                           lockMode={lockMode}
                           onToggleLock={() => onToggleFieldLock?.(key)}
                         />
-                        {field === "description" && editingFields && (
-                          // Description resolves as override ?? item type, and the projection hands
-                          // the panel the already-resolved value -- so this control cannot tell an
-                          // override from the item type's own line, and it appears with the row's
-                          // other editing affordances. Clicking it on an inherited value is a
-                          // harmless no-op. null is the one value that drops the override so the
-                          // item type shows again; "" would instead keep an empty override and
-                          // suppress it. The cast below is needed because
-                          // InventoryTrackerRow declares the four display fields only; null here is the
-                          // runtime revert signal, not a widened shared type.
+                        {field === "description" && editingFields && descriptionOverridden && (
+                          // Description resolves as override ?? item type, and the projection now
+                          // hands the panel both -- the resolved line and the type's own -- so this
+                          // draws only when the stack really overrides it. null is the one value
+                          // that drops the override so the item type shows again; "" would instead
+                          // keep an empty override and suppress it. The cast is needed because
+                          // InventoryTrackerRow declares the four display fields only; null here is
+                          // the runtime revert signal, not a widened shared type.
                           <button
                             type="button"
                             onClick={() =>
                               updateRow(index, { ...row, description: null } as unknown as InventoryTrackerRow)
                             }
                             className="mari-chrome-tag grid h-3.5 w-3.5 shrink-0 place-items-center p-0 leading-none text-current ring-1 ring-[color-mix(in_srgb,var(--tracker-profile-text)_28%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--tracker-profile-text)_8%,transparent)] focus-visible:outline-none focus-visible:ring-[color-mix(in_srgb,var(--tracker-profile-text)_48%,transparent)]"
-                            title={localizeUi("ui.trackerPanel.inventoryTracker.revertToItemType", { item: row.name })}
+                            title={localizeUi("ui.trackerPanel.inventoryTracker.revertToItemType", {
+                              item: richRow.definition?.name ?? row.name,
+                            })}
                             aria-label={localizeUi("ui.trackerPanel.inventoryTracker.revertToItemType", {
-                              item: row.name,
+                              item: richRow.definition?.name ?? row.name,
                             })}
                           >
                             <RotateCcw size="0.5rem" className="mari-rgb-static-icon block text-current" />
@@ -480,7 +551,7 @@ function InventoryGroup({
         {draftName !== null && (
           <div
             tabIndex={-1}
-            className="mari-chrome-tag flex min-h-6 min-w-0 max-w-full items-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 py-1 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7"
+            className="mari-chrome-tag relative z-30 flex min-h-6 min-w-0 max-w-full items-center gap-1 border border-[var(--tracker-profile-slot-rule)] bg-[image:var(--tracker-profile-slot-surface)] px-1.5 py-1 text-[color:var(--tracker-profile-text)] shadow-[inset_0_1px_2px_var(--tracker-profile-slot-shadow)] [@media(pointer:coarse)]:min-h-7"
             onBlur={commitDraftOnBlur}
           >
             <input
@@ -562,6 +633,9 @@ export function InventoryTrackerPanel({
   // button (the HUD popover) passes `allowAdd` and leaves `addMode` off, so its rows stop
   // drawing every empty field. Callers that pass only `addMode` behave exactly as before.
   const canAdd = allowAdd ?? addMode;
+  // Minimal UI lives here rather than in either host: the docked panel and the HUD
+  // popover render this same component, so one toggle serves both.
+  const [minimal, setMinimal] = useState(false);
   // A move is two writes, and the dossier's editor adapter is what makes them one
   // move: the destination row carries the same uuid, so the source group's
   // disappearance is an updated identity rather than a deletion. Both writes share
@@ -595,6 +669,31 @@ export function InventoryTrackerPanel({
           />
         )}
         {!collapsed && (
+          // Minimal UI: one row of controls rather than an absolutely positioned chip.
+          // Both hosts draw their own lock and refresh in the header's right cluster, so
+          // an overlay there would sit on top of controls the panel does not own.
+          <div className="flex items-center justify-end px-1.5 pt-1">
+            <button
+              type="button"
+              onClick={() => setMinimal((current) => !current)}
+              title={localizeUi(
+                minimal
+                  ? "ui.trackerPanel.inventoryTracker.exitMinimalMode"
+                  : "ui.trackerPanel.inventoryTracker.minimalMode",
+              )}
+              aria-label={localizeUi(
+                minimal
+                  ? "ui.trackerPanel.inventoryTracker.exitMinimalMode"
+                  : "ui.trackerPanel.inventoryTracker.minimalMode",
+              )}
+              aria-pressed={minimal}
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded p-0.5 text-[var(--muted-foreground)]/50 ring-1 ring-transparent transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] hover:ring-[var(--border)] active:scale-90 aria-pressed:bg-[var(--foreground)]/12 aria-pressed:text-[var(--foreground)] aria-pressed:ring-[var(--foreground)]/24"
+            >
+              {minimal ? <Maximize2 size="0.625rem" /> : <Minimize2 size="0.625rem" />}
+            </button>
+          </div>
+        )}
+        {!collapsed && (
           // Groups stack full-width. Splitting the panel into three columns gave the
           // longest group a third of the width and truncated its names, while a group
           // with two rows sat mostly empty.
@@ -607,6 +706,7 @@ export function InventoryTrackerPanel({
               deleteMode={deleteMode}
               addMode={addMode}
               allowAdd={canAdd}
+              minimal={minimal}
             />
             <InventoryGroup
               group="equipped"
@@ -617,6 +717,7 @@ export function InventoryTrackerPanel({
               deleteMode={deleteMode}
               addMode={addMode}
               allowAdd={canAdd}
+              minimal={minimal}
             />
             <InventoryGroup
               group="inventory"
@@ -627,6 +728,7 @@ export function InventoryTrackerPanel({
               deleteMode={deleteMode}
               addMode={addMode}
               allowAdd={canAdd}
+              minimal={minimal}
             />
           </div>
         )}

@@ -486,12 +486,28 @@ function applyRowUpdate(
   }
 
   // A name differing from the definition is a STACK OVERRIDE, never a new
-  // definition.
+  // definition -- and stating the definition's own name DROPS the override rather
+  // than storing a redundant copy, so typing the type's name back removes a
+  // nickname. An EMPTY name is the other half: an editor row always states every
+  // field, so "" is a deliberate clear and becomes an empty override. `null` would
+  // resolve the name back to the type -- the field refilling itself, which reads as
+  // the system fighting you -- while "" keeps the field empty and lets the type's
+  // name show as the greyed hint. An omitted name is untouched, and an agent row
+  // never reaches this branch.
   const definition = dossier.definitions.find((d) => d.id === stack.definitionId);
   const rowKey = canonicalName(row.name);
-  if (rowKey && rowKey !== canonicalName(definition?.name)) {
-    stack.name = rowKey;
-    stack.displayName = row.name;
+  const definitionKey = canonicalName(definition?.name);
+  if (rowKey) {
+    if (definitionKey && rowKey === definitionKey) {
+      stack.name = null;
+      stack.displayName = null;
+    } else {
+      stack.name = rowKey;
+      stack.displayName = row.name;
+    }
+  } else if (row.editorSourced && typeof row.name === "string") {
+    stack.name = "";
+    stack.displayName = "";
   }
 
   if (row.type !== undefined) stack.type = row.type;
@@ -505,6 +521,20 @@ function applyRowUpdate(
   if (row.class !== undefined) stack.class = row.class;
   if (row.rarity !== undefined) stack.rarity = row.rarity;
   if (row.equipmentSlot !== undefined) stack.equipmentSlot = row.equipmentSlot;
+
+  // Stating exactly what the item type already says is not an override. Dropping
+  // the copy keeps "does this stack override its type?" answerable from the stored
+  // value alone, so the two can never drift apart or pile up. An empty string is
+  // deliberately NOT deduped: that is an empty override, which suppresses the type.
+  if (definition) {
+    for (const field of ["description", "class", "rarity"] as const) {
+      const stackValue = stack[field];
+      const typeValue = definition[field];
+      if (typeof stackValue === "string" && stackValue !== "" && stackValue === typeValue) {
+        stack[field] = null;
+      }
+    }
+  }
   if (row.isUnique !== undefined) {
     stack.isUnique = row.isUnique;
     if (row.isUnique) stack.qty = 1;
@@ -582,9 +612,15 @@ function stackLocationKey(stack: DossierStack): string {
 }
 
 /**
- * Collapse duplicates the model split by accident. Definition, owner, type,
+ * Collapse duplicates the model split by accident. Definition, owner, type, NAME,
  * flair and LOCATION must all match and neither side may be unique: 10 arrows on
  * you and 200 in your room are two piles, and summing them invents 210 on you.
+ *
+ * The name is the same identity `findStack` matches on, resolved the same way, so
+ * the two agree: a pile you renamed to "Fel's sketchbook" and a bare "Sketchbook"
+ * are different piles and giving them the same flair must not fuse them. Two
+ * unrenamed piles both resolve to the definition's name and still merge, which is
+ * the accidental-duplicate case this exists for.
  */
 function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
   const kept: DossierStack[] = [];
@@ -594,12 +630,14 @@ function mergeDuplicateStacks(dossier: PersistentItemDossier): void {
       continue;
     }
     const locationKey = stackLocationKey(stack);
+    const nameKey = canonicalName(resolvedStackName(stack, dossier));
     const twin = kept.find(
       (k) =>
         !k.isUnique &&
         k.definitionId === stack.definitionId &&
         canonicalName(k.owner) === canonicalName(stack.owner) &&
         k.type === stack.type &&
+        canonicalName(resolvedStackName(k, dossier)) === nameKey &&
         canonicalName(k.flair ?? "") === canonicalName(stack.flair ?? "") &&
         stackLocationKey(k) === locationKey,
     );

@@ -171,7 +171,11 @@ function formatInventoryTrackerLine(
   item: any,
   fields: readonly InventoryTrackerRenderField[] = DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS,
 ): string | null {
-  const name = asText(item?.name);
+  // A name the user deliberately cleared stays empty in the panel, but the pile is
+  // still theirs and still part of the scene, so it must not vanish from the narrator's
+  // view. The projection carries the item TYPE beside the resolved name, so fall back to
+  // it -- the block names the kind of thing rather than dropping the row entirely.
+  const name = asText(item?.name) || asText(item?.definition?.name);
   if (!name) return null;
   const quantity = finiteNumberText(item?.qty);
   const details = fields
