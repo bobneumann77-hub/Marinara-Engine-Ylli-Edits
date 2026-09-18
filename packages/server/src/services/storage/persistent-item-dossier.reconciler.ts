@@ -35,7 +35,20 @@ export interface DossierAgentRow {
   name: string;
   type?: DossierStack["type"];
   qty?: number;
+  /**
+   * STACK trait: this instance is personal, powerful or story-important, and it
+   * survives deletion by being archived at qty 0. Settable on create and update,
+   * and it clamps the pile to 1.
+   */
   isUnique?: boolean;
+  /**
+   * DEFINITION trait, honoured only on a fresh mint (a row with no uuid): the item
+   * is truly singular, so only ONE pile of its type can exist. A minted stack of
+   * such a type is forced `isUnique` + qty 1, and a later row naming the type is
+   * routed onto that existing pile instead of minting a twin. Stating it on an
+   * existing definition is ignored -- this flag is not a stack property.
+   */
+  isNamedArtifact?: boolean;
   isDestroyed?: boolean;
   /**
    * Engine-internal: set by the inventory adapter for an entry in a group's
@@ -298,9 +311,13 @@ function findStack(
     const byId = dossier.stacks.find((s) => s.id === row.uuid);
     if (byId) return byId;
   }
-  // Scoped to the same owner and type, so a hallucinated uuid on a carried potion
-  // cannot grab the bedroom pile.
+  // A row with no name has nothing to match on: it can only ever point at a stack
+  // by uuid. Without this, an empty key would scope-match a pile whose own name is
+  // empty (a cleared name override), letting a stale uuid grab the wrong stack.
+  // The loop drops such a row right after, so a nameless row reaches a stack or
+  // nothing at all.
   const key = canonicalName(row.name);
+  if (!key) return undefined;
   const ownerKey = canonicalName(row.owner);
   const type = row.type ?? "inventory";
   // Destroyed stacks are invisible to name matching: re-creating a destroyed
@@ -355,8 +372,9 @@ function findDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): D
 
 /**
  * Mint a definition. `isNamedArtifact` is set only here, and only for a row with
- * no uuid and `isUnique: true`: an update can never mint a definition, so a
- * rename never creates a new template.
+ * no uuid that STATES it: an update can never mint a definition, so a rename
+ * never creates a new template, and stating the flag on an existing definition
+ * changes nothing.
  */
 function mintDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): DossierDefinition {
   const ts = now();
@@ -367,7 +385,7 @@ function mintDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): D
     class: row.class ?? null,
     rarity: row.rarity ?? null,
     description: row.description ?? null,
-    isNamedArtifact: row.uuid === undefined && row.isUnique === true,
+    isNamedArtifact: row.uuid === undefined && row.isNamedArtifact === true,
     aliases: [],
     updatedAt: ts,
   };
@@ -798,6 +816,13 @@ export async function reconcileItemDossier(
       continue;
     }
 
+    // A uuid that resolved to no stack, on a row that names nothing either, is a
+    // stale or hallucinated reference: no pile to touch, and no name to search or
+    // mint with. Dropping it here is what lets a uuid-only row through the adapter
+    // safely -- it can only ever reach a stack. A row that also states a name keeps
+    // its name fallback (a botched uuid still finds the pile by name).
+    if (!existing && !canonicalName(row.name) && row.uuid) continue;
+
     // A qty of 0 destroys an EXISTING stack, but it is not a total: an
     // unmatched row would mint a fresh pile (at qty 1, per the floor below),
     // resurrecting an item the agent just killed from out of context. Deletion
@@ -805,6 +830,41 @@ export async function reconcileItemDossier(
     if (row.qty !== undefined && row.qty <= 0) continue;
 
     const matchedDefinition = findDefinition(dossier, row);
+    // A named artifact can only ever have ONE pile, so the row is routed onto the
+    // existing one instead of minting a twin. A live pile takes precedence over an
+    // archived one, but when the only pile is archived, applyRowUpdate's revive
+    // branch brings it back at qty 1: a one-of-a-kind type guarantees there is
+    // nowhere else the row could point.
+    if (matchedDefinition?.isNamedArtifact) {
+      const artifact =
+        dossier.stacks.find((s) => s.definitionId === matchedDefinition.id && !s.isDestroyed) ??
+        dossier.stacks.find((s) => s.definitionId === matchedDefinition.id);
+      if (artifact) {
+        // Routing is CONTENT, never a relocation. A uuid-less row is a creation
+        // attempt or a stray mention; neither carries a move's authority, and both
+        // editors stamp the group the row was written in -- so honouring that type
+        // let a draft in one column drag a one-of-a-kind pile into it. A real move
+        // states the uuid, which findStack resolves before this point is reached,
+        // and an archived pile still revives here. Re-stating the pile's OWN type
+        // keeps the group write a no-op while stampLocation still knows whether the
+        // pile is carried or lying somewhere.
+        //
+        // The same rule covers the HAND-OFF. An omitted owner resolves to the
+        // persona, so a bare mention in the player's groups would silently take the
+        // artifact off whoever holds it -- the row never said it changed hands, it
+        // merely did not say otherwise. An explicitly stated owner is still honoured
+        // (the agent expressed an intent); only the default is refused.
+        const routedOwner = canonicalName(raw.owner)
+          ? owner
+          : {
+              name: artifact.owner,
+              id: artifact.ownerId ?? null,
+              isPlayer: artifact.ownerId != null && artifact.ownerId === playerIdentity(context).id,
+            };
+        applyRowUpdate(dossier, artifact, { ...row, type: artifact.type }, context, routedOwner);
+        continue;
+      }
+    }
     const definition = matchedDefinition ?? mintDefinition(dossier, row);
     const stack = mintStack(definition, row, context, owner);
     if (matchedDefinition) {
@@ -931,15 +991,24 @@ export function buildDossierRowsFromInventoryTracker({
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
       const row = raw as Record<string, unknown>;
       const name = readOptionalString(row.name);
-      if (!name) continue;
+      const uuid = readOptionalString(row.uuid);
+      // A row must NAME an item or POINT AT one by uuid. Small models regularly
+      // omit the name on a move or hand-off (`{ uuid, owner }`); the reconciler
+      // accepts those -- findStack resolves them by id -- and the mint path drops
+      // a stated uuid that resolves to nothing, so a nameless row can only ever
+      // reach a stack and can never create vocabulary.
+      if (!name && !uuid) continue;
       const owner = readOptionalString(row.owner);
       const flair = readOptionalString(row.flair);
-      rows.set(dossierRowKey(type, name, owner, flair), {
-        uuid: readOptionalString(row.uuid),
-        name,
+      // The de-dup key is built from the name, so two nameless rows are told
+      // apart by the uuid they point at instead of collapsing into one.
+      rows.set(name ? dossierRowKey(type, name, owner, flair) : `${type}:uuid:${uuid}`, {
+        uuid,
+        name: name ?? "",
         type,
         qty: typeof row.qty === "number" ? row.qty : undefined,
         isUnique: typeof row.isUnique === "boolean" ? row.isUnique : undefined,
+        isNamedArtifact: row.isNamedArtifact === true ? true : undefined,
         isDestroyed: row.isDestroyed === true ? true : undefined,
         flair,
         description: readOptionalString(row.description),
@@ -961,11 +1030,24 @@ export function buildDossierRowsFromInventoryTracker({
   // `removed` entries become match-only removal rows, appended after every
   // group's update rows. A removal whose identity was ALSO updated this turn
   // is a move (the default prompt removes on move), not a deletion.
+  //
+  // The identity sets are collected from the RAW groups, not from the surviving
+  // rows: a row that failed the name gate above -- a uuid-only move, which small
+  // models emit -- still STATES that identity this turn, and the reconciler
+  // accepts uuid-only rows. Reading the survivors let a `{ uuid, owner }` world
+  // row vanish and its matching `removed` entry destroy the very item it was
+  // handing over. A uuid this payload touches anywhere is never deleted by it.
   const updatedUuids = new Set<string>();
   const updatedNames = new Set<string>();
-  for (const row of rows.values()) {
-    if (row.uuid) updatedUuids.add(row.uuid);
-    updatedNames.add(canonicalName(row.name));
+  for (const field of Object.keys(INVENTORY_TRACKER_GROUP_TYPES)) {
+    for (const raw of readGroupRows(rawData?.[field])) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const row = raw as Record<string, unknown>;
+      const uuid = readOptionalString(row.uuid);
+      if (uuid) updatedUuids.add(uuid);
+      const name = readOptionalString(row.name);
+      if (name) updatedNames.add(canonicalName(name));
+    }
   }
   for (const [field, type] of Object.entries(INVENTORY_TRACKER_GROUP_TYPES)) {
     if (field === "world") continue; // world is a full snapshot; nothing deletes through it

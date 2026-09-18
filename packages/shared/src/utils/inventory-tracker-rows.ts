@@ -196,8 +196,12 @@ export function normalizeInventoryTrackerPlayerStats(playerStats: unknown): unkn
  */
 const ROW_TEXT_FIELDS = ["description", "location", "class", "rarity", "flair", "equipmentSlot"] as const;
 
-/** Per-instance flags the editor may set. */
-const ROW_FLAG_FIELDS = ["isUnique", "isStolen", "isGifted"] as const;
+/**
+ * Boolean flags a row may state. `isNamedArtifact` is a DEFINITION trait read only
+ * on a fresh mint, but it belongs to this list so an editor row stating it is
+ * validated instead of rejected as junk.
+ */
+const ROW_FLAG_FIELDS = ["isUnique", "isNamedArtifact", "isStolen", "isGifted"] as const;
 
 /**
  * Describe the first row a human would consider malformed, or `null` when the whole
