@@ -10254,6 +10254,7 @@
   "ui.trackerPanel.inlinenumber.lockField": "Lock field",
   "ui.trackerPanel.inlinenumber.unlockField": "Unlock field",
   "ui.trackerPanel.inventoryTracker.addToGroup": "Add to {{group}}",
+  "ui.trackerPanel.inventoryTracker.confirmRemoveUnique": "Delete {{item}}? This unique item will be removed from your inventory.",
   "ui.trackerPanel.inventoryTracker.currencies": "Currencies",
   "ui.trackerPanel.inventoryTracker.description": "Description",
   "ui.trackerPanel.inventoryTracker.descriptionFor": "Description for {{item}}",

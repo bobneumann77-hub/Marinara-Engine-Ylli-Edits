@@ -246,3 +246,25 @@ export function findInvalidInventoryTrackerRow(value: unknown): string | null {
   }
   return null;
 }
+
+/** The text a row sorts under: its own name, or its item type's when the stack cleared it. */
+function inventoryTrackerSortName(row: InventoryTrackerRow): string {
+  const own = inventoryTrackerComparableName(row?.name);
+  if (own) return own;
+  const fromType = (row as { definition?: { name?: unknown } } | undefined)?.definition?.name;
+  return inventoryTrackerComparableName(fromType);
+}
+
+/**
+ * Alphabetical row order, shared so the panel and the projection cannot disagree.
+ *
+ * The projection used to order by `createdAt`, which is never sent to the client: a row
+ * moved between groups landed at the bottom of its new group and then jumped to its
+ * creation slot when the save response arrived. Ordering by the name the panel shows
+ * makes one comparator usable on both sides. Equal names fall back to the uuid, so two
+ * rows can never swap places between writes, and a cleared name sorts under its type.
+ */
+export function compareInventoryTrackerRows(a: InventoryTrackerRow, b: InventoryTrackerRow): number {
+  const byName = inventoryTrackerSortName(a).localeCompare(inventoryTrackerSortName(b), "en-US");
+  return byName !== 0 ? byName : inventoryTrackerRowUuid(a).localeCompare(inventoryTrackerRowUuid(b));
+}

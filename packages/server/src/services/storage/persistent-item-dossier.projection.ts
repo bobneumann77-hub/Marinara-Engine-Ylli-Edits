@@ -10,6 +10,7 @@
 // Only the three `inventoryTracker*` keys are written: `playerStats` is a shared
 // blob, so it is shallow-merged and the other trackers survive.
 import { isDeepStrictEqual } from "node:util";
+import { compareInventoryTrackerRows, type InventoryTrackerRow } from "@marinara-engine/shared";
 import {
   INVENTORY_TRACKER_STATS_FIELDS,
   isPlayerOwnedStack,
@@ -107,10 +108,17 @@ function projectStack(stack: DossierStack, definition: DossierDefinition | undef
   return row;
 }
 
-/** Creation order, tie-broken by stack id, so the injected block never churns. */
-function byCreationOrder(a: DossierStack, b: DossierStack): number {
-  const byCreatedAt = String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""));
-  return byCreatedAt !== 0 ? byCreatedAt : a.id.localeCompare(b.id);
+/**
+ * Alphabetical row order, through the SAME comparator the tracker panel sorts with.
+ *
+ * This sorted by `createdAt`, which is never sent to the client: a row moved between
+ * groups appeared at the bottom of its new group and then jumped to its creation slot
+ * when this projection arrived. Ordering by the name the panel shows makes one
+ * comparator correct on both sides. Nothing here is persisted -- array order is
+ * presentation -- so re-sorting is free, and the tie-break keeps it from churning.
+ */
+function byTrackerOrder(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  return compareInventoryTrackerRows(a as unknown as InventoryTrackerRow, b as unknown as InventoryTrackerRow);
 }
 
 /**
@@ -140,9 +148,11 @@ export function projectDossierToPlayerStats(args: ProjectDossierToPlayerStatsArg
     const field = INVENTORY_TRACKER_STATS_FIELDS[type];
     // Ask with the group prefix the panel actually writes, not the field name.
     if (args.isFieldLocked?.(inventoryTrackerGroupLockPrefix(type))) continue;
+    // Sorted AFTER projection, so the comparator sees the resolved name the panel
+    // shows: a renamed stack sorts under its nickname, not under its item type.
     const rows = [...buckets[type]]
-      .sort(byCreationOrder)
-      .map((stack) => projectStack(stack, definitions.get(stack.definitionId)));
+      .map((stack) => projectStack(stack, definitions.get(stack.definitionId)))
+      .sort(byTrackerOrder);
     if (!isDeepStrictEqual(rows, base[field] ?? [])) changed = true;
     next[field] = rows;
   }

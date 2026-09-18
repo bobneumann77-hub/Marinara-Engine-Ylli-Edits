@@ -13,6 +13,7 @@
 // rich one keeps the rows exactly as the panel holds them, because that path now
 // writes through the item dossier, where uuid/class/rarity/flair are the point.
 import {
+  compareInventoryTrackerRows,
   excludeInventoryTrackerCarriedDuplicates,
   normalizeInventoryTrackerRows,
   type InventoryTrackerGroup,
@@ -32,6 +33,19 @@ export type InventoryTrackerPatch = Pick<
 >;
 
 /**
+ * Alphabetical order, through the shared comparator the projection also uses.
+ *
+ * The projection sorted by `createdAt`, which the client never receives, so a moved row
+ * landed at the bottom of its new group and then jumped to its creation slot when the
+ * save response arrived. Sorting here means the optimistic view already shows the order
+ * the server will return, so nothing moves a beat later. A different order (rarity,
+ * class, grouping) belongs to the client view alone.
+ */
+function sortInventoryTrackerRows(rows: InventoryTrackerRow[]): InventoryTrackerRow[] {
+  return [...rows].sort(compareInventoryTrackerRows);
+}
+
+/**
  * Build the `playerStats` patch for one edited group.
  *
  * Rows merge by name here exactly as they do on the server, so the optimistic store
@@ -49,10 +63,10 @@ export function buildInventoryTrackerEditPatch(
   const equipped = group === "equipped" ? normalized : (currentPlayerStats?.inventoryTrackerEquipped ?? []);
   const carried = group === "inventory" ? normalized : (currentPlayerStats?.inventoryTrackerInventory ?? []);
 
-  const patch: Partial<InventoryTrackerPatch> = { [FIELD_BY_GROUP[group]]: normalized };
+  const patch: Partial<InventoryTrackerPatch> = { [FIELD_BY_GROUP[group]]: sortInventoryTrackerRows(normalized) };
 
   const deduped = excludeInventoryTrackerCarriedDuplicates(carried, currencies, equipped);
-  if (deduped.length !== carried.length) patch.inventoryTrackerInventory = deduped;
+  if (deduped.length !== carried.length) patch.inventoryTrackerInventory = sortInventoryTrackerRows(deduped);
 
   return patch;
 }
@@ -79,10 +93,10 @@ export function buildInventoryTrackerRichEditPatch(
   const equipped = group === "equipped" ? rows : (currentPlayerStats?.inventoryTrackerEquipped ?? []);
   const carried = group === "inventory" ? rows : (currentPlayerStats?.inventoryTrackerInventory ?? []);
 
-  const patch: Partial<InventoryTrackerPatch> = { [FIELD_BY_GROUP[group]]: rows };
+  const patch: Partial<InventoryTrackerPatch> = { [FIELD_BY_GROUP[group]]: sortInventoryTrackerRows(rows) };
 
   const deduped = excludeInventoryTrackerCarriedDuplicates(carried, currencies, equipped);
-  if (deduped.length !== carried.length) patch.inventoryTrackerInventory = deduped;
+  if (deduped.length !== carried.length) patch.inventoryTrackerInventory = sortInventoryTrackerRows(deduped);
 
   return patch;
 }

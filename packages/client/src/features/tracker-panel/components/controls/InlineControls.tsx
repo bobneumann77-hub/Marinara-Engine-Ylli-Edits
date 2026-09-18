@@ -103,6 +103,8 @@ export function InlineEdit({
   locked = false,
   lockMode = false,
   onToggleLock,
+  onEditingChange,
+  elevateEditing = false,
 }: {
   value: string | number | null | undefined;
   onSave: (value: string) => void;
@@ -125,6 +127,9 @@ export function InlineEdit({
   locked?: boolean;
   lockMode?: boolean;
   onToggleLock?: () => void;
+  onEditingChange?: (editing: boolean) => void;
+  /** Raise the open input above a host's dismissal shield, so the caret stays clickable. */
+  elevateEditing?: boolean;
 }) {
   const { t: localizeUi } = useUiTranslation();
   const currentValue = value === null || value === undefined ? "" : String(value);
@@ -140,6 +145,12 @@ export function InlineEdit({
   const scrollMeasureRef = useRef<HTMLSpanElement>(null);
   const committedRef = useRef(false);
   const lockToggleActive = lockMode && !!onToggleLock;
+  // Tells the host a field is open. A panel uses it to shield its other rows for the
+  // length of one tap: leaving a field should commit it and do nothing else.
+  const applyEditing = (next: boolean) => {
+    setEditing(next);
+    onEditingChange?.(next);
+  };
 
   useEffect(() => {
     if (!editing) setDraft(currentValue);
@@ -174,7 +185,7 @@ export function InlineEdit({
     committedRef.current = true;
     const trimmed = draft.trim();
     if (trimmed !== currentValue) onSave(trimmed);
-    setEditing(false);
+    applyEditing(false);
   };
 
   if (editing) {
@@ -187,13 +198,25 @@ export function InlineEdit({
           if (event.key === "Enter") commit();
           if (event.key === "Escape") {
             setDraft(currentValue);
-            setEditing(false);
+            applyEditing(false);
           }
         }}
         onBlur={commit}
         className={cn(
-          "min-w-0 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-xs text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30",
+          // `[font-size:inherit]` instead of a fixed size: the display preview inherits
+          // the row's size, so pinning the input made the text jump larger exactly when
+          // you started editing -- the moment you need to read what you wrote.
+          "min-w-0 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 [font-size:inherit] text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30",
           className,
+          // Fill the line while editing. `w-fit` (what the display state uses) shrank the
+          // box to the typed text, so a long value was written through a keyhole. `flex-1`
+          // rather than `w-full`: this input is a flex child beside the row's label and its
+          // right-hand controls, and a percentage width would push them off the line.
+          "flex-1",
+          // Opt-in: a host that shields its group while a field is open needs the open
+          // input above that layer, or the caret is unclickable. Only the input rises --
+          // never the row around it, which stays shielded with everything else.
+          elevateEditing && "relative z-30",
         )}
         style={style}
         placeholder={placeholder}
@@ -210,7 +233,7 @@ export function InlineEdit({
           onToggleLock?.();
           return;
         }
-        setEditing(true);
+        applyEditing(true);
       }}
       onMouseEnter={measureScrollOverflow}
       onFocus={measureScrollOverflow}
