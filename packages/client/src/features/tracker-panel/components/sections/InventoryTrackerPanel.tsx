@@ -13,6 +13,7 @@ import {
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { showConfirmDialog } from "../../../../lib/app-dialogs";
 import { cn } from "../../../../lib/utils";
+import { useUIStore } from "../../../../stores/ui.store";
 import { InlineEdit, InlineNumber } from "../controls/InlineControls";
 import { pluralizeInventoryName } from "../../lib/inventory-tracker-display";
 import { TrackerReadabilityVeil } from "../controls/TrackerProfileChrome";
@@ -765,9 +766,11 @@ export function InventoryTrackerPanel({
   // button (the HUD popover) passes `allowAdd` and leaves `addMode` off, so its rows stop
   // drawing every empty field. Callers that pass only `addMode` behave exactly as before.
   const canAdd = allowAdd ?? addMode;
-  // Minimal UI lives here rather than in either host: the docked panel and the HUD
-  // popover render this same component, so one toggle serves both.
-  const [minimal, setMinimal] = useState(false);
+  // Minimal UI lives in the UI store rather than in either host: the docked panel and the
+  // HUD popover render this same component, so one toggle serves both -- and it survives
+  // the panel unmounting, which the local useState it replaced could not.
+  const minimal = useUIStore((state) => state.trackerPanelInventoryMinimal);
+  const setMinimal = useUIStore((state) => state.setTrackerPanelInventoryMinimal);
   // A move is two writes, and the dossier's editor adapter is what makes them one
   // move: the destination row carries the same uuid, so the source group's
   // disappearance is an updated identity rather than a deletion. Both writes share
@@ -816,7 +819,7 @@ export function InventoryTrackerPanel({
           <div className="flex items-center justify-end px-1.5 pt-1">
             <button
               type="button"
-              onClick={() => setMinimal((current) => !current)}
+              onClick={() => setMinimal(!minimal)}
               title={localizeUi(
                 minimal
                   ? "ui.trackerPanel.inventoryTracker.exitMinimalMode"
@@ -830,7 +833,8 @@ export function InventoryTrackerPanel({
               aria-pressed={minimal}
               className="flex h-5 w-5 shrink-0 items-center justify-center rounded p-0.5 text-[var(--muted-foreground)]/50 ring-1 ring-transparent transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] hover:ring-[var(--border)] active:scale-90 aria-pressed:bg-[var(--foreground)]/12 aria-pressed:text-[var(--foreground)] aria-pressed:ring-[var(--foreground)]/24"
             >
-              {minimal ? <Maximize2 size="0.625rem" /> : <Minimize2 size="0.625rem" />}
+              {/* State chip: arrows point in while minimized, out when the rows are full size. */}
+              {minimal ? <Minimize2 size="0.625rem" /> : <Maximize2 size="0.625rem" />}
             </button>
           </div>
         )}
