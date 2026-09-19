@@ -105,6 +105,7 @@ export function InlineEdit({
   onToggleLock,
   onEditingChange,
   elevateEditing = false,
+  previewValue,
 }: {
   value: string | number | null | undefined;
   onSave: (value: string) => void;
@@ -130,10 +131,21 @@ export function InlineEdit({
   onEditingChange?: (editing: boolean) => void;
   /** Raise the open input above a host's dismissal shield, so the caret stays clickable. */
   elevateEditing?: boolean;
+  /**
+   * Display-only text for the collapsed preview. The edit input, the commit
+   * comparison and the title keep reading `value`, so a host can show a plural name
+   * without it ever becoming the stored one.
+   */
+  previewValue?: string;
 }) {
   const { t: localizeUi } = useUiTranslation();
   const currentValue = value === null || value === undefined ? "" : String(value);
-  const previewText = currentValue || placeholder;
+  // What the pill SHOWS, which may differ from what it stores: 87 dollars read
+  // "Dollars" while the field still edits "Dollar". Identity stays on
+  // `currentValue` -- the input, the commit comparison and the tooltip -- so a
+  // display string can never be saved as the value.
+  const displayValue = previewValue ?? currentValue;
+  const previewText = displayValue || placeholder;
   const multilinePreviewLineCount = previewLineCount ?? (threeLinePreview ? 3 : twoLinePreview ? 2 : undefined);
   const useFittedPreview = fitPreview && !fullPreview && !multilinePreviewLineCount;
   const useHoverScroll = scrollOnHover && !useFittedPreview;
@@ -267,13 +279,15 @@ export function InlineEdit({
       )}
       style={style}
     >
-      {useHoverScroll && currentValue ? (
+      {/* Measured against the DISPLAYED text: a plural preview is longer than the
+          stored value, and this check decides whether the pill scrolls on hover. */}
+      {useHoverScroll && displayValue ? (
         <span
           ref={scrollMeasureRef}
           aria-hidden="true"
           className="pointer-events-none absolute left-0 top-0 block h-0 w-max max-w-none overflow-hidden whitespace-nowrap opacity-0"
         >
-          {currentValue}
+          {displayValue}
         </span>
       ) : null}
       {useFittedPreview ? (
@@ -314,11 +328,11 @@ export function InlineEdit({
           )}
           style={previewStyle}
         >
-          {useHoverScroll && currentValue && scrollActive ? (
+          {useHoverScroll && displayValue && scrollActive ? (
             <span className="roleplay-hud-scroll-track">
-              <span className="pr-6">{currentValue}</span>
+              <span className="pr-6">{displayValue}</span>
               <span className="pr-6" aria-hidden>
-                {currentValue}
+                {displayValue}
               </span>
             </span>
           ) : (

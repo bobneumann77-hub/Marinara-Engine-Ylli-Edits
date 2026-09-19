@@ -51,6 +51,14 @@ export interface DossierDefinition {
   rarity?: string | null;
   description?: string | null;
   isNamedArtifact: boolean;
+  /**
+   * The item type IS money: coins, tokens, spendable currency. A definition trait
+   * like `isNamedArtifact`, honoured only at mint, because currency-ness belongs to
+   * the type (a fresh pile of gold should still be money) and never to one pile.
+   * The panel reads it to route the equip/unequip arrow into `currencies` instead
+   * of into equipment; the server never forces it, so a dropped purse stays dropped.
+   */
+  isCurrency: boolean;
   aliases?: string[]; // stubbed for future flair-name mapping; do not use yet
   /**
    * Despite updatedAt not being read yet, i'm leaving it in, to eventually offer

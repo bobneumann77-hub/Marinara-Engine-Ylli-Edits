@@ -350,6 +350,11 @@ const INVENTORY_TRACKER_ROW_KEYS = [
  * agent's context is pure bloat: a thirty-item inventory would carry the same
  * handful of types thirty times. The panel reads the projected rows from game
  * state directly, so it keeps them.
+ *
+ * Two type-level facts are lifted onto the row first, because an agent cannot respect
+ * a flag it cannot see: `isNamedArtifact` (this type exists once in the world, so never
+ * mint another) and `isCurrency` (money has no business being worn). Each is stated
+ * only when true, so a plain row gains nothing.
  */
 function omitInventoryTrackerDefinitions(playerStats: unknown): unknown {
   if (!isRecord(playerStats)) return playerStats;
@@ -364,6 +369,11 @@ function omitInventoryTrackerDefinitions(playerStats: unknown): unknown {
       const withoutDefinition: Record<string, unknown> = {};
       for (const [field, value] of Object.entries(row)) {
         if (field !== "definition") withoutDefinition[field] = value;
+      }
+      const type = row.definition;
+      if (isRecord(type)) {
+        if (type.isNamedArtifact === true) withoutDefinition.isNamedArtifact = true;
+        if (type.isCurrency === true) withoutDefinition.isCurrency = true;
       }
       rowsChanged = true;
       return withoutDefinition;

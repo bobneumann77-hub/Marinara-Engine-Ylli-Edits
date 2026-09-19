@@ -204,6 +204,7 @@ export function buildDossierRowsFromEditorRows(
         equipmentSlot: editorClearableText(row.equipmentSlot),
         isUnique: editorBool(row.isUnique),
         isNamedArtifact: editorBool(row.isNamedArtifact),
+        isCurrency: editorBool(row.isCurrency),
         isStolen: editorBool(row.isStolen),
         isGifted: editorBool(row.isGifted),
         ...(row.customFields && typeof row.customFields === "object" && !Array.isArray(row.customFields)

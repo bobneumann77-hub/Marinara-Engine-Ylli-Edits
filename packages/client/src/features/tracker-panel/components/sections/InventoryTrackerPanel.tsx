@@ -1,5 +1,5 @@
 import { useRef, useState, type FocusEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Backpack, Lock, Maximize2, Minimize2, RotateCcw, Star, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Backpack, Gem, Lock, Maximize2, Minimize2, RotateCcw, Star, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
   normalizeInventoryTrackerName,
@@ -14,6 +14,7 @@ import { useTranslation as useUiTranslation } from "react-i18next";
 import { showConfirmDialog } from "../../../../lib/app-dialogs";
 import { cn } from "../../../../lib/utils";
 import { InlineEdit, InlineNumber } from "../controls/InlineControls";
+import { pluralizeInventoryName } from "../../lib/inventory-tracker-display";
 import { TrackerReadabilityVeil } from "../controls/TrackerProfileChrome";
 import { AddRowButton, EmptySection, SectionHeader, TRACKER_SECTION_SHELL_CLASS } from "../controls/SectionControls";
 import { useTrackerLockContext } from "../TrackerLockContext";
@@ -194,7 +195,7 @@ function InventoryGroup({
       const rich = candidate as InventoryTrackerRow & {
         flair?: string;
         isUnique: boolean;
-        definition?: { name?: string };
+        definition?: { name?: string; isNamedArtifact?: boolean };
       };
       // A cleared name stores an empty override, so that pile's own name reads "". The
       // server still matches it by its item type's name, so compare the same thing here
@@ -355,17 +356,41 @@ function InventoryGroup({
           const richRow = row as InventoryTrackerRow & {
             flair?: string;
             isUnique?: boolean;
-            definition?: { name?: string; description?: string; class?: string; rarity?: string };
+            definition?: {
+              name?: string;
+              description?: string;
+              class?: string;
+              rarity?: string;
+              // A TYPE fact, projected beside the resolved name above: what the type
+              // itself says, not what this pile overrides. Absent when not an artifact.
+              isNamedArtifact?: boolean;
+              // Another TYPE fact: money has no business being worn, so the arrow files
+              // it under currencies instead of equipment.
+              isCurrency?: boolean;
+            };
           };
           const flair = richRow.flair ?? "";
-          // Currencies have nowhere to be worn, so only the carried groups move.
-          const moveTarget: InventoryTrackerGroup | null =
+          // A carried row moves to the other carried group -- unless its TYPE is money,
+          // in which case the arrow files it under currencies instead of equipment. The
+          // flag describes, the click routes: nothing forces a pile the agent filed
+          // elsewhere. Currencies rows are never a dead end; the down arrow is
+          // unconditional, because an agent may file money without stating the flag.
+          const isCurrencyType = richRow.definition?.isCurrency === true;
+          const carriedTarget: InventoryTrackerGroup | null =
             group === "inventory" ? "equipped" : group === "equipped" ? "inventory" : null;
+          const moveTarget: InventoryTrackerGroup | null =
+            group === "currencies" ? "inventory" : isCurrencyType ? "currencies" : carriedTarget;
+          // The label follows the SOURCE, not the destination: leaving currencies and
+          // unequipping both land in inventory, and they are not the same action.
           const moveLabel = moveTarget
             ? localizeUi(
-                moveTarget === "equipped"
-                  ? "ui.trackerPanel.inventoryTracker.equipItem"
-                  : "ui.trackerPanel.inventoryTracker.unequipItem",
+                moveTarget === "currencies"
+                  ? "ui.trackerPanel.inventoryTracker.fileAsCurrency"
+                  : group === "currencies"
+                    ? "ui.trackerPanel.inventoryTracker.moveToInventory"
+                    : moveTarget === "equipped"
+                      ? "ui.trackerPanel.inventoryTracker.equipItem"
+                      : "ui.trackerPanel.inventoryTracker.unequipItem",
                 { item: row.name },
               )
             : "";
@@ -414,6 +439,11 @@ function InventoryGroup({
                 {nameLocked && LOCK_GLYPH}
                 <InlineEdit
                   value={row.name}
+                  // A pile over one reads as a plural in the pill ("Dollars") while the
+                  // field still edits the stored singular: the name is identity -- the
+                  // matcher's first tier, the save key, the sort key -- so the display
+                  // rule lives here and never reaches a write.
+                  previewValue={pluralizeInventoryName(row.name, quantity)}
                   onSave={(name) => {
                     // An emptied name stays EMPTY. It used to be replaced with the item
                     // type's name right here, so the field refilled itself the moment you
@@ -462,6 +492,23 @@ function InventoryGroup({
                         locked={qtyLocked}
                         lockMode={lockMode}
                         onToggleLock={() => onToggleFieldLock?.(qtyKey)}
+                      />
+                    </span>
+                  )}
+                  {/* A one-of-a-kind TYPE, marked beside the star and never on the name:
+                      the star is a stack fact, this one is a type fact, and the name
+                      button keeps the click target the fields just gave back to it. */}
+                  {richRow.definition?.isNamedArtifact === true && (
+                    <span
+                      className="grid h-3.5 w-3.5 shrink-0 place-items-center p-0 leading-none text-amber-500"
+                      title={localizeUi("ui.trackerPanel.inventoryTracker.namedArtifact")}
+                      aria-label={localizeUi("ui.trackerPanel.inventoryTracker.namedArtifact")}
+                    >
+                      <Gem
+                        size="0.5rem"
+                        fill="currentColor"
+                        className="mari-rgb-static-icon block"
+                        aria-hidden="true"
                       />
                     </span>
                   )}
@@ -528,10 +575,10 @@ function InventoryGroup({
                       title={moveLabel}
                       aria-label={moveLabel}
                     >
-                      {moveTarget === "equipped" ? (
-                        <ArrowUp size="0.5625rem" className="mari-rgb-static-icon block text-current" />
-                      ) : (
+                      {moveTarget === "inventory" ? (
                         <ArrowDown size="0.5625rem" className="mari-rgb-static-icon block text-current" />
+                      ) : (
+                        <ArrowUp size="0.5625rem" className="mari-rgb-static-icon block text-current" />
                       )}
                     </button>
                   )}
@@ -727,14 +774,23 @@ export function InventoryTrackerPanel({
   // one save burst (the queue keeps its first baseline), so the POST sees the
   // finished state and never a half-moved row.
   const moveRow = (from: InventoryTrackerGroup, index: number, to: InventoryTrackerGroup) => {
-    const fromRows = from === "equipped" ? equipped : inventory;
-    const toRows = to === "equipped" ? equipped : inventory;
+    // Three groups move through here now: a currency type files into currencies, so
+    // the group's rows and its setter are looked up rather than assumed to be two.
+    const rowsOf = (group: InventoryTrackerGroup) => {
+      if (group === "currencies") return currencies;
+      if (group === "equipped") return equipped;
+      return inventory;
+    };
+    const setterOf = (group: InventoryTrackerGroup) => {
+      if (group === "currencies") return onUpdateCurrencies;
+      if (group === "equipped") return onUpdateEquipped;
+      return onUpdateInventory;
+    };
+    const fromRows = rowsOf(from);
     const row = fromRows[index];
     if (!row) return;
-    const setFrom = from === "equipped" ? onUpdateEquipped : onUpdateInventory;
-    const setTo = to === "equipped" ? onUpdateEquipped : onUpdateInventory;
-    setFrom(fromRows.filter((_, rowIndex) => rowIndex !== index));
-    setTo([...toRows, row]);
+    setterOf(from)(fromRows.filter((_, rowIndex) => rowIndex !== index));
+    setterOf(to)([...rowsOf(to), row]);
   };
   return (
     // Own the query container rather than inheriting one. The docked sidebar provides
@@ -788,6 +844,7 @@ export function InventoryTrackerPanel({
               label={localizeUi("ui.trackerPanel.inventoryTracker.currencies")}
               rows={currencies}
               onUpdate={onUpdateCurrencies}
+              onMoveTo={(index, to) => moveRow("currencies", index, to)}
               deleteMode={deleteMode}
               addMode={addMode}
               allowAdd={canAdd}

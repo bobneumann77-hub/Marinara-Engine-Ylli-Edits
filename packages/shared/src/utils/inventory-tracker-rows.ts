@@ -201,7 +201,7 @@ const ROW_TEXT_FIELDS = ["description", "location", "class", "rarity", "flair", 
  * on a fresh mint, but it belongs to this list so an editor row stating it is
  * validated instead of rejected as junk.
  */
-const ROW_FLAG_FIELDS = ["isUnique", "isNamedArtifact", "isStolen", "isGifted"] as const;
+const ROW_FLAG_FIELDS = ["isUnique", "isNamedArtifact", "isCurrency", "isStolen", "isGifted"] as const;
 
 /**
  * Describe the first row a human would consider malformed, or `null` when the whole

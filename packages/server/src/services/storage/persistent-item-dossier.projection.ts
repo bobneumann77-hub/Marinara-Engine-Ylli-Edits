@@ -103,6 +103,13 @@ function projectStack(stack: DossierStack, definition: DossierDefinition | undef
     if (typeDescription) typeRow.description = typeDescription;
     if (typeClass) typeRow.class = typeClass;
     if (typeRarity) typeRow.rarity = typeRarity;
+    // A TYPE fact, unlike the stack's isUnique: the panel draws the star from the
+    // row, and a one-of-a-kind flag sitting on the same row would read as settable.
+    // Omitted when false, so absent keeps meaning "not an artifact".
+    if (definition.isNamedArtifact) typeRow.isNamedArtifact = true;
+    // The panel reads this to route its equip arrow into `currencies` instead of
+    // equipment. Same omission-when-false shape as the flag above.
+    if (definition.isCurrency) typeRow.isCurrency = true;
     row.definition = typeRow;
   }
   return row;

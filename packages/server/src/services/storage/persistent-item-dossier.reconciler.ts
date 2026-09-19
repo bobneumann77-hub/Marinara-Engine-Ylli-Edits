@@ -49,6 +49,13 @@ export interface DossierAgentRow {
    * existing definition is ignored -- this flag is not a stack property.
    */
   isNamedArtifact?: boolean;
+  /**
+   * DEFINITION trait, honoured only on a fresh mint (a row with no uuid): this item
+   * type is money. The panel files such a stack into `currencies` rather than
+   * equipment when the arrow is used; the server never forces the group, so a purse
+   * left on the floor stays in `world` like any other dropped thing.
+   */
+  isCurrency?: boolean;
   isDestroyed?: boolean;
   /**
    * Engine-internal: set by the inventory adapter for an entry in a group's
@@ -386,6 +393,8 @@ function mintDefinition(dossier: PersistentItemDossier, row: DossierAgentRow): D
     rarity: row.rarity ?? null,
     description: row.description ?? null,
     isNamedArtifact: row.uuid === undefined && row.isNamedArtifact === true,
+    // Same creation-only gate as above: a fresh mint states it, an update cannot.
+    isCurrency: row.uuid === undefined && row.isCurrency === true,
     aliases: [],
     updatedAt: ts,
   };
@@ -1009,6 +1018,7 @@ export function buildDossierRowsFromInventoryTracker({
         qty: typeof row.qty === "number" ? row.qty : undefined,
         isUnique: typeof row.isUnique === "boolean" ? row.isUnique : undefined,
         isNamedArtifact: row.isNamedArtifact === true ? true : undefined,
+        isCurrency: row.isCurrency === true ? true : undefined,
         isDestroyed: row.isDestroyed === true ? true : undefined,
         flair,
         description: readOptionalString(row.description),
