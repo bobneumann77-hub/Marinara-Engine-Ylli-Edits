@@ -213,15 +213,22 @@ const ROW_FLAG_FIELDS = ["isUnique", "isNamedArtifact", "isCurrency", "isStolen"
  *
  * Accepts every field the dossier write path carries, so the editor is limited by the
  * vocabulary rather than by this check -- a bare `uuid` and a `null` on a text field
- * included. Still deliberately stricter than the agent path: a row needs a name, and
- * `qty` stays at 1 or above, because a zero destroys the stack it names.
+ * included. A row is identified by its name or by its uuid: the agent prompt teaches a
+ * move as a bare uuid, so requiring a name here would reject a row the reconciler
+ * accepts, and the whole update would be dropped. Quantity stays stricter than the
+ * agent path -- `qty` at 1 or above -- because a zero destroys the stack it names.
  */
 export function findInvalidInventoryTrackerRow(value: unknown): string | null {
   if (!Array.isArray(value)) return "must be an array";
   for (const [index, candidate] of value.entries()) {
     if (!isPlainRecord(candidate)) return `row ${index} must be an object`;
-    if (typeof candidate.name !== "string") return `row ${index} is missing a string "name"`;
-    if (!normalizeInventoryTrackerName(candidate.name)) return `row ${index} has an empty "name"`;
+    // A row is identified by its name or by its dossier uuid. The agent prompt teaches a
+    // move as a bare uuid, so a row carrying only one is complete, not malformed -- and a
+    // row stating neither has nothing for the reconciler to resolve it against.
+    const hasName = typeof candidate.name === "string";
+    const hasUuid = typeof candidate.uuid === "string" && candidate.uuid.trim() !== "";
+    if (!hasName && !hasUuid) return `row ${index} is missing a string "name"`;
+    if (hasName && !normalizeInventoryTrackerName(candidate.name)) return `row ${index} has an empty "name"`;
     if (candidate.uuid !== undefined && typeof candidate.uuid !== "string") {
       return `row ${index} has a non-string "uuid"`;
     }
