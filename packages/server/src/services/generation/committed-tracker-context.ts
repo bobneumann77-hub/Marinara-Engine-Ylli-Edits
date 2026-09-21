@@ -145,27 +145,81 @@ function formatQuestLine(quest: any): string | null {
 }
 
 /**
- * Fields the committed-context renderer may append to an inventory line, in
- * order. These are the stack fields the projection writes, minus `uuid` (engine
- * plumbing the model has no use for) and `qty`/`name` (always rendered).
+ * Fields a settings picker may tick for an inventory line. Render order follows THIS
+ * array rather than the caller's selection order, so a line reads the same however a
+ * picker writes its set. `name` and `qty` are always rendered and never appear here;
+ * `uuid` is engine plumbing the model has no use for.
+ *
+ * `isStolen` is deliberately absent: the projection does not emit it, so offering it
+ * here would draw a toggle that renders nothing.
  */
 export const INVENTORY_TRACKER_RENDER_FIELDS = [
   "flair",
-  "rarity",
-  "description",
-  "class",
-  "location",
   "isUnique",
+  "isNamedArtifact",
+  "description",
+  "location",
+  "class",
+  "rarity",
 ] as const;
 export type InventoryTrackerRenderField = (typeof INVENTORY_TRACKER_RENDER_FIELDS)[number];
 
 /**
- * On by default: `flair` is the one field written as narrative-usable text
- * ("cracked", "wrapped in oilcloth"), so the prose model can actually use the
- * condition. The list is a PARAMETER so a per-chat picker can widen it later
+ * Rendered by default: `flair` is the one stack field written as narrative-usable text
+ * ("cracked", "wrapped in oilcloth"), the two flags mark the instances worth not
+ * losing ("unique" / "one of a kind"), `description` says what the type is, and
+ * `location` says where the thing actually sits -- which the narrator needs before it
+ * can reach for it. The list is a PARAMETER so a per-chat picker can widen or narrow it
  * without a second renderer -- that seam is the whole point of the signature.
  */
-const DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS: readonly InventoryTrackerRenderField[] = ["flair", "description"];
+const DEFAULT_INVENTORY_TRACKER_RENDER_FIELDS: readonly InventoryTrackerRenderField[] = [
+  "flair",
+  "isUnique",
+  "isNamedArtifact",
+  "description",
+  "location",
+];
+
+/** Labels for the fields that render as their own segment, e.g. `- Location: pocket`. */
+const INVENTORY_TRACKER_FIELD_LABELS: Partial<Record<InventoryTrackerRenderField, string>> = {
+  description: "Description",
+  location: "Location",
+  class: "Class",
+  rarity: "Rarity",
+};
+
+/**
+ * Fields that render inside the parenthetical instead of as a labelled segment: `flair`
+ * because it is prose, and the two flags because a bare word ("unique", "one of a
+ * kind") reads as description where `- Unique: true` would read as data. `isNamedArtifact`
+ * is a fact about the item TYPE while the rest are stack facts, but the narrator does not
+ * care about that split -- it only needs to know this is the important one.
+ */
+const INVENTORY_TRACKER_PARENTHETICAL_FIELDS = new Set<InventoryTrackerRenderField>([
+  "flair",
+  "isUnique",
+  "isNamedArtifact",
+]);
+
+/** One field's contribution to a line, or null when the row has nothing to say. */
+function formatInventoryTrackerField(item: any, field: InventoryTrackerRenderField): string | null {
+  if (field === "isUnique") return item?.isUnique === true ? "unique" : null;
+  if (field === "isNamedArtifact") return item?.definition?.isNamedArtifact === true ? "one of a kind" : null;
+  const value = asText(item?.[field]);
+  if (!value) return null;
+  if (field === "flair") return value;
+  return `${INVENTORY_TRACKER_FIELD_LABELS[field] ?? field}: ${value}`;
+}
+
+/**
+ * A prose field's closing period fights the parenthetical's `; ` joiner: "One ring to
+ * rule them all.; unique" reads as a sentence that failed to end. Only a lone final
+ * period goes -- "!" and "?" are voice, and a trailing ellipsis is not a sentence end
+ * to rewrite.
+ */
+function stripParentheticalPeriod(text: string): string {
+  return text.endsWith(".") && !text.endsWith("..") ? text.slice(0, -1) : text;
+}
 
 function formatInventoryTrackerLine(
   item: any,
@@ -177,14 +231,26 @@ function formatInventoryTrackerLine(
   // it -- the block names the kind of thing rather than dropping the row entirely.
   const name = asText(item?.name) || asText(item?.definition?.name);
   if (!name) return null;
+  const selected = new Set(fields);
+  const rendered = INVENTORY_TRACKER_RENDER_FIELDS.filter((field) => selected.has(field))
+    .map((field) => ({ field, text: formatInventoryTrackerField(item, field) }))
+    .filter((entry): entry is { field: InventoryTrackerRenderField; text: string } => entry.text !== null);
+  // An artifact is one of a kind, so "unique" beside it only says the same thing twice.
+  // Suppressed per line and only while the artifact flag actually renders, so a picker
+  // that turns artifacts off still gets the unique signal.
+  const saysArtifact = rendered.some((entry) => entry.field === "isNamedArtifact");
+  const spoken = saysArtifact ? rendered.filter((entry) => entry.field !== "isUnique") : rendered;
+  const parenthetical = spoken.filter((entry) => INVENTORY_TRACKER_PARENTHETICAL_FIELDS.has(entry.field));
+  const labelled = spoken.filter((entry) => !INVENTORY_TRACKER_PARENTHETICAL_FIELDS.has(entry.field));
   const quantity = finiteNumberText(item?.qty);
-  const details = fields
-    .map((field) => {
-      if (field === "isUnique") return item?.isUnique === true ? "unique" : null;
-      return formatNamedValueLine({ name: field, value: item?.[field] });
-    })
-    .filter(isNonEmptyLine);
-  return `- ${name}${quantity && Number(quantity) > 1 ? ` x${quantity}` : ""}${details.length ? ` (${details.join("; ")})` : ""}`;
+  // A lone item reads better without a count; the number exists to size a pile.
+  const quantityText = quantity !== null && Number(quantity) > 1 ? ` [${quantity}x]` : "";
+  const parentheticalText =
+    parenthetical.length > 0
+      ? ` (${parenthetical.map((entry) => stripParentheticalPeriod(entry.text)).join("; ")})`
+      : "";
+  const labelledText = labelled.map((entry) => ` - ${entry.text}`).join("");
+  return `- ${name}${quantityText}${parentheticalText}${labelledText}`;
 }
 
 export function buildCommittedTrackerContextBlock(args: {
