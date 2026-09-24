@@ -1,15 +1,23 @@
-import type { GameState, PlayerStats } from "@marinara-engine/shared";
+import type { GameState, InventoryTrackerGroup, PlayerStats } from "@marinara-engine/shared";
 import {
   excludeInventoryTrackerCarriedDuplicates,
   findInvalidInventoryTrackerRow,
   normalizeInventoryTrackerRows,
 } from "@marinara-engine/shared";
+import { saveInventoryTrackerToDossier } from "./inventory-tracker-dossier-save";
 
 export type AgentSuiteTrackerSlice = {
   label: string;
   description: string;
   getValue: (gameState: GameState) => unknown;
   buildPatch: (gameState: GameState, parsed: unknown) => Record<string, unknown> | { error: string };
+  /**
+   * Present on slices whose tracker persists through its own endpoint instead of
+   * the shared game-state PATCH, whose normalizer strips dossier-only fields
+   * (uuid, class, rarity, flair). Saves the draft server-side and returns the
+   * server's projected playerStats, which the caller adopts as-is.
+   */
+  save?: (args: { chatId: string; snapshot: GameState; parsed: unknown }) => Promise<PlayerStats>;
 };
 
 function createEmptyPlayerStats(): PlayerStats {
@@ -21,6 +29,33 @@ function createEmptyPlayerStats(): PlayerStats {
     activeQuests: [],
     status: "",
   };
+}
+
+/**
+ * Shape-check a tracker draft without normalizing it: reports the first bad row
+ * instead of silently dropping it. The shared normalizer drops rows it cannot
+ * read, so `[{ "foo": 1 }]` would become `[]` and look to the author like the
+ * editor had eaten a group they just typed.
+ */
+function validateInventoryTrackerDraft(
+  parsed: unknown,
+): { error: string } | { groups: Record<InventoryTrackerGroup, unknown[]> } {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: "Inventory Tracker data must be a JSON object" };
+  }
+  const record = parsed as Record<string, unknown>;
+  if (!Array.isArray(record.currencies) || !Array.isArray(record.equipped) || !Array.isArray(record.inventory)) {
+    return { error: "Inventory Tracker data must include currencies, equipped, and inventory arrays" };
+  }
+  for (const [group, rows] of [
+    ["currencies", record.currencies],
+    ["equipped", record.equipped],
+    ["inventory", record.inventory],
+  ] as const) {
+    const problem = findInvalidInventoryTrackerRow(rows);
+    if (problem) return { error: `Inventory Tracker "${group}": ${problem}` };
+  }
+  return { groups: { currencies: record.currencies, equipped: record.equipped, inventory: record.inventory } };
 }
 
 /** Per-tracker-agent slice of the latest game-state snapshot. */
@@ -113,28 +148,12 @@ export const AGENT_SUITE_TRACKER_SLICES: Record<string, AgentSuiteTrackerSlice> 
       inventory: gameState.playerStats?.inventoryTrackerInventory ?? [],
     }),
     buildPatch: (gameState, parsed) => {
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { error: "Inventory Tracker data must be a JSON object" };
-      }
-      const record = parsed as Record<string, unknown>;
-      if (!Array.isArray(record.currencies) || !Array.isArray(record.equipped) || !Array.isArray(record.inventory)) {
-        return { error: "Inventory Tracker data must include currencies, equipped, and inventory arrays" };
-      }
-      // Report malformed rows instead of normalizing them away. The shared normalizer
-      // drops rows it cannot read, so `[{ "foo": 1 }]` would silently become `[]` and
-      // look to the author like the editor had eaten a group they just typed.
-      for (const [group, rows] of [
-        ["currencies", record.currencies],
-        ["equipped", record.equipped],
-        ["inventory", record.inventory],
-      ] as const) {
-        const problem = findInvalidInventoryTrackerRow(rows);
-        if (problem) return { error: `Inventory Tracker "${group}": ${problem}` };
-      }
+      const checked = validateInventoryTrackerDraft(parsed);
+      if ("error" in checked) return checked;
 
-      const currencies = normalizeInventoryTrackerRows(record.currencies);
-      const equipped = normalizeInventoryTrackerRows(record.equipped);
-      const carried = normalizeInventoryTrackerRows(record.inventory);
+      const currencies = normalizeInventoryTrackerRows(checked.groups.currencies);
+      const equipped = normalizeInventoryTrackerRows(checked.groups.equipped);
+      const carried = normalizeInventoryTrackerRows(checked.groups.inventory);
       return {
         playerStats: {
           ...(gameState.playerStats ?? createEmptyPlayerStats()),
@@ -143,6 +162,11 @@ export const AGENT_SUITE_TRACKER_SLICES: Record<string, AgentSuiteTrackerSlice> 
           inventoryTrackerInventory: excludeInventoryTrackerCarriedDuplicates(carried, currencies, equipped),
         },
       };
+    },
+    save: async ({ chatId, snapshot, parsed }) => {
+      const checked = validateInventoryTrackerDraft(parsed);
+      if ("error" in checked) throw new Error(checked.error);
+      return saveInventoryTrackerToDossier(chatId, snapshot, checked.groups);
     },
   },
   quest: {

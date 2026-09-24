@@ -22,7 +22,8 @@ import type { StatIconLookup } from "../hooks/use-stat-icons";
 import { useTrackerMutations } from "../hooks/use-tracker-mutations";
 import { useTrackerRerun } from "../hooks/use-tracker-rerun";
 import type { PersonaPortraitSaveSnapshot } from "../hooks/use-persona-portrait-save";
-import { buildInventoryTrackerEditPatch } from "../lib/inventory-tracker-edit";
+import { buildInventoryTrackerRichEditPatch } from "../lib/inventory-tracker-edit";
+import { queueDossierSave } from "../lib/inventory-tracker-dossier-queue";
 import { TRACKER_SECTION_AGENT_TYPES, TRACKER_SECTION_RERUN_TITLES } from "../lib/tracker-panel.constants";
 import type { TrackerPanelSection, TrackerSpriteLookup } from "../tracker-panel.types";
 import { SectionIconButton } from "./controls/SectionControls";
@@ -48,7 +49,7 @@ export function TrackerSectionList({
   orderedTrackerSections,
   patchField,
   patchPlayerStats,
-  patchPlayerStatsMany,
+  patchPlayerStatsManyLocal,
   resolveSpriteCharacterId,
   spriteExpressions,
   trackerPanelCollapsedSections,
@@ -81,7 +82,8 @@ export function TrackerSectionList({
   orderedTrackerSections: TrackerPanelSection[];
   patchField: (field: GameStatePatchField, value: unknown) => void;
   patchPlayerStats: (field: keyof NonNullable<GameState["playerStats"]>, value: unknown) => void;
-  patchPlayerStatsMany: (
+  /** Store-only `playerStats` write: the Inventory Tracker persists through the dossier endpoint. */
+  patchPlayerStatsManyLocal: (
     patch:
       | Partial<NonNullable<GameState["playerStats"]>>
       | ((current: NonNullable<GameState["playerStats"]>) => Partial<NonNullable<GameState["playerStats"]>>),
@@ -137,9 +139,15 @@ export function TrackerSectionList({
   const inventoryTrackerInventory = Array.isArray(playerStats?.inventoryTrackerInventory)
     ? playerStats.inventoryTrackerInventory
     : [];
-  // Editing one group can rewrite two, so this must land as a single patch.
-  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) =>
-    patchPlayerStatsMany((current) => buildInventoryTrackerEditPatch(current, group, rows));
+  // Editing one group can rewrite two, so the optimistic patch lands in one write.
+  // The dossier save is queued FIRST: it captures the pre-edit baseline, and the
+  // removal diff needs that, not the optimistic rows. The write itself is local-only --
+  // the dossier owns this field, and the game-state PATCH would repaint normalized
+  // rows over the projection it just stored.
+  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) => {
+    queueDossierSave(activeChatId);
+    patchPlayerStatsManyLocal((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
+  };
   const {
     addCharacter,
     addPersonaStat,
