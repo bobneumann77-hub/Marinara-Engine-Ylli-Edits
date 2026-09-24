@@ -103,6 +103,9 @@ export function InlineEdit({
   locked = false,
   lockMode = false,
   onToggleLock,
+  onEditingChange,
+  elevateEditing = false,
+  previewValue,
 }: {
   value: string | number | null | undefined;
   onSave: (value: string) => void;
@@ -125,10 +128,24 @@ export function InlineEdit({
   locked?: boolean;
   lockMode?: boolean;
   onToggleLock?: () => void;
+  onEditingChange?: (editing: boolean) => void;
+  /** Raise the open input above a host's dismissal shield, so the caret stays clickable. */
+  elevateEditing?: boolean;
+  /**
+   * Display-only text for the collapsed preview. The edit input, the commit
+   * comparison and the title keep reading `value`, so a host can show a plural name
+   * without it ever becoming the stored one.
+   */
+  previewValue?: string;
 }) {
   const { t: localizeUi } = useUiTranslation();
   const currentValue = value === null || value === undefined ? "" : String(value);
-  const previewText = currentValue || placeholder;
+  // What the pill SHOWS, which may differ from what it stores: 87 dollars read
+  // "Dollars" while the field still edits "Dollar". Identity stays on
+  // `currentValue` -- the input, the commit comparison and the tooltip -- so a
+  // display string can never be saved as the value.
+  const displayValue = previewValue ?? currentValue;
+  const previewText = displayValue || placeholder;
   const multilinePreviewLineCount = previewLineCount ?? (threeLinePreview ? 3 : twoLinePreview ? 2 : undefined);
   const useFittedPreview = fitPreview && !fullPreview && !multilinePreviewLineCount;
   const useHoverScroll = scrollOnHover && !useFittedPreview;
@@ -140,6 +157,12 @@ export function InlineEdit({
   const scrollMeasureRef = useRef<HTMLSpanElement>(null);
   const committedRef = useRef(false);
   const lockToggleActive = lockMode && !!onToggleLock;
+  // Tells the host a field is open. A panel uses it to shield its other rows for the
+  // length of one tap: leaving a field should commit it and do nothing else.
+  const applyEditing = (next: boolean) => {
+    setEditing(next);
+    onEditingChange?.(next);
+  };
 
   useEffect(() => {
     if (!editing) setDraft(currentValue);
@@ -174,7 +197,7 @@ export function InlineEdit({
     committedRef.current = true;
     const trimmed = draft.trim();
     if (trimmed !== currentValue) onSave(trimmed);
-    setEditing(false);
+    applyEditing(false);
   };
 
   if (editing) {
@@ -187,13 +210,25 @@ export function InlineEdit({
           if (event.key === "Enter") commit();
           if (event.key === "Escape") {
             setDraft(currentValue);
-            setEditing(false);
+            applyEditing(false);
           }
         }}
         onBlur={commit}
         className={cn(
-          "min-w-0 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-xs text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30",
+          // `[font-size:inherit]` instead of a fixed size: the display preview inherits
+          // the row's size, so pinning the input made the text jump larger exactly when
+          // you started editing -- the moment you need to read what you wrote.
+          "min-w-0 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 [font-size:inherit] text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--foreground)]/30",
           className,
+          // Fill the line while editing. `w-fit` (what the display state uses) shrank the
+          // box to the typed text, so a long value was written through a keyhole. `flex-1`
+          // rather than `w-full`: this input is a flex child beside the row's label and its
+          // right-hand controls, and a percentage width would push them off the line.
+          "flex-1",
+          // Opt-in: a host that shields its group while a field is open needs the open
+          // input above that layer, or the caret is unclickable. Only the input rises --
+          // never the row around it, which stays shielded with everything else.
+          elevateEditing && "relative z-30",
         )}
         style={style}
         placeholder={placeholder}
@@ -210,7 +245,7 @@ export function InlineEdit({
           onToggleLock?.();
           return;
         }
-        setEditing(true);
+        applyEditing(true);
       }}
       onMouseEnter={measureScrollOverflow}
       onFocus={measureScrollOverflow}
@@ -244,13 +279,15 @@ export function InlineEdit({
       )}
       style={style}
     >
-      {useHoverScroll && currentValue ? (
+      {/* Measured against the DISPLAYED text: a plural preview is longer than the
+          stored value, and this check decides whether the pill scrolls on hover. */}
+      {useHoverScroll && displayValue ? (
         <span
           ref={scrollMeasureRef}
           aria-hidden="true"
           className="pointer-events-none absolute left-0 top-0 block h-0 w-max max-w-none overflow-hidden whitespace-nowrap opacity-0"
         >
-          {currentValue}
+          {displayValue}
         </span>
       ) : null}
       {useFittedPreview ? (
@@ -291,11 +328,11 @@ export function InlineEdit({
           )}
           style={previewStyle}
         >
-          {useHoverScroll && currentValue && scrollActive ? (
+          {useHoverScroll && displayValue && scrollActive ? (
             <span className="roleplay-hud-scroll-track">
-              <span className="pr-6">{currentValue}</span>
+              <span className="pr-6">{displayValue}</span>
               <span className="pr-6" aria-hidden>
-                {currentValue}
+                {displayValue}
               </span>
             </span>
           ) : (

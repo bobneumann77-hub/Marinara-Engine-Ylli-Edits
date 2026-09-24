@@ -599,6 +599,8 @@ interface UIState {
   trackerStatDisplayMode: TrackerStatDisplayMode;
   trackerPanelDockedThoughtsAlwaysVisible: boolean;
   trackerPanelSizeProfile: TrackerPanelSizeProfile;
+  /** Inventory tracker: every row starts collapsed to its pill. Persisted, so closing the panel does not reset it. */
+  trackerPanelInventoryMinimal: boolean;
   trackerPanelBackgroundColor: string;
   trackerTemperatureUnit: TrackerTemperatureUnit;
   trackerPanelCollapsedSections: TrackerPanelCollapsedSections;
@@ -1015,6 +1017,7 @@ interface UIState {
   restoreTrackerPanelOpenForChat: (chatId: string | null) => void;
   setTrackerPanelSide: (side: TrackerPanelSide) => void;
   setTrackerPanelHideHudWidgets: (hidden: boolean) => void;
+  setTrackerPanelInventoryMinimal: (minimal: boolean) => void;
   setTrackerPanelUseExpressionSprites: (enabled: boolean) => void;
   setTrackerPanelThoughtBubbleDisplay: (display: TrackerThoughtBubbleDisplay) => void;
   setTrackerStatDisplayMode: (display: TrackerStatDisplayMode) => void;
@@ -1529,6 +1532,7 @@ export function pickPersistedUIState(state: UIState) {
     trackerPanelOpen: state.trackerPanelOpen,
     trackerPanelOpenByChatId: state.trackerPanelOpenByChatId,
     trackerPanelSide: state.trackerPanelSide,
+    trackerPanelInventoryMinimal: state.trackerPanelInventoryMinimal,
     trackerPanelHideHudWidgets: state.trackerPanelHideHudWidgets,
     trackerPanelUseExpressionSprites: state.trackerPanelUseExpressionSprites,
     trackerPanelThoughtBubbleDisplay: state.trackerPanelThoughtBubbleDisplay,
@@ -1727,6 +1731,7 @@ export const useUIStore = create<UIState>()(
         trackerStatDisplayMode: "bars" as TrackerStatDisplayMode,
         trackerPanelDockedThoughtsAlwaysVisible: false,
         trackerPanelSizeProfile: "standard" as TrackerPanelSizeProfile,
+        trackerPanelInventoryMinimal: false,
         trackerPanelBackgroundColor: TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
         trackerTemperatureUnit: "celsius" as TrackerTemperatureUnit,
         trackerPanelCollapsedSections: {},
@@ -2009,6 +2014,7 @@ export const useUIStore = create<UIState>()(
         },
         setTrackerPanelSide: (side) => set({ trackerPanelSide: side }),
         setTrackerPanelHideHudWidgets: (hidden) => set({ trackerPanelHideHudWidgets: hidden }),
+        setTrackerPanelInventoryMinimal: (minimal) => set({ trackerPanelInventoryMinimal: minimal }),
         setTrackerPanelUseExpressionSprites: (enabled) => set({ trackerPanelUseExpressionSprites: enabled }),
         setTrackerPanelThoughtBubbleDisplay: (display) =>
           set({ trackerPanelThoughtBubbleDisplay: normalizeTrackerThoughtBubbleDisplay(display) }),
