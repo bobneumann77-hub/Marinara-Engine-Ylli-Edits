@@ -46,7 +46,8 @@ import {
   type WorldWeatherFamily,
 } from "../../lib/world-state-helpers";
 import { TrackerLockProvider, useTrackerLockContext } from "../../features/tracker-panel/components/TrackerLockContext";
-import { buildInventoryTrackerEditPatch } from "../../features/tracker-panel/lib/inventory-tracker-edit";
+import { buildInventoryTrackerRichEditPatch } from "../../features/tracker-panel/lib/inventory-tracker-edit";
+import { queueDossierSave } from "../../features/tracker-panel/lib/inventory-tracker-dossier-queue";
 import { useTrackerFieldLockUpdater } from "../../features/tracker-panel/hooks/use-tracker-field-lock-updater";
 import { NEUTRAL_PANEL_SCROLL_AREA, NEUTRAL_PANEL_SHELL } from "../ui/neutral-surface-styles";
 import {
@@ -136,7 +137,7 @@ export function RoleplayHUD({
   const gameState = useGameStateStore((s) => s.current);
   const gameStateRefreshing = useGameStateStore((s) => s.isRefreshing);
   const setGameState = useGameStateStore((s) => s.setGameState);
-  const { patchField, patchPlayerStats, patchPlayerStatsMany } = useGameStatePatcher(chatId, "roleplay-hud");
+  const { patchField, patchPlayerStats, patchPlayerStatsManyLocal } = useGameStatePatcher(chatId, "roleplay-hud");
 
   const { data: agentConfigs } = useAgentConfigs();
   const { data: advancedMemoryStatus } = useAdvancedMemoryStatus(chatId, advancedMemoryEnabled);
@@ -268,9 +269,15 @@ export function RoleplayHUD({
   const inventoryTrackerCurrencies = playerStats?.inventoryTrackerCurrencies ?? [];
   const inventoryTrackerEquipped = playerStats?.inventoryTrackerEquipped ?? [];
   const inventoryTrackerInventory = playerStats?.inventoryTrackerInventory ?? [];
-  // Editing one group can rewrite two, so this must land as a single patch.
-  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) =>
-    patchPlayerStatsMany((current) => buildInventoryTrackerEditPatch(current, group, rows));
+  // Editing one group can rewrite two, so the optimistic patch lands in one write.
+  // The dossier save is queued FIRST: it captures the pre-edit baseline, and the
+  // removal diff needs that, not the optimistic rows. The write itself is local-only --
+  // the dossier owns this field, and the game-state PATCH would repaint normalized
+  // rows over the projection it just stored.
+  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) => {
+    queueDossierSave(chatId);
+    patchPlayerStatsManyLocal((current) => buildInventoryTrackerRichEditPatch(current, group, rows));
+  };
   const fieldLocks = gameState ? normalizeTrackerFieldLocksForState(gameState.fieldLocks, gameState) : null;
   const hiddenTrackerFields = gameState ? normalizeTrackerHiddenFields(gameState.hiddenTrackerFields) : null;
   const updateFieldLocks = useTrackerFieldLockUpdater({ chatId, fieldLocks, patchField });
