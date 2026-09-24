@@ -72,11 +72,7 @@ export async function resolveLauncherStorageDir({ root = repositoryRoot, env = p
  * written by a newer format — it would silently see empty chat history and
  * could write a conflicting old-format file.
  */
-export async function checkTargetStorageFormat({
-  root = repositoryRoot,
-  env = process.env,
-  targetRef,
-} = {}) {
+export async function checkTargetStorageFormat({ root = repositoryRoot, env = process.env, targetRef } = {}) {
   if (!targetRef) throw new Error("checkTargetStorageFormat requires a targetRef");
 
   // A crash can leave only manifest.json.bak — the on-disk format must not
@@ -225,6 +221,8 @@ const SHARDED_TABLES = [
   "library_folders",
   "mari_instructions",
   "mari_workspace_context",
+  "persistent_item_dossier",
+  "persistent_item_dossier_snapshots",
 ];
 const PRIMARY_KEY_COLUMNS = { app_settings: "key", prompt_overrides: "key" };
 const UNSHARD_SENTINEL = ".unshard-in-progress";
@@ -483,10 +481,7 @@ export async function unshardLauncherStorage({
   return { storageDir, results, warnings, manifestRewritten };
 }
 
-export async function resolveLauncherDataDir({
-  root = repositoryRoot,
-  env = process.env,
-} = {}) {
+export async function resolveLauncherDataDir({ root = repositoryRoot, env = process.env } = {}) {
   const pick = await readLauncherEnv(root, env);
   const configured = pick("DATA_DIR");
   if (!configured) return resolve(root, "packages/server/data");
@@ -676,15 +671,21 @@ async function main() {
     for (const warning of result.warnings) console.warn(`  [WARN] ${warning}`);
     for (const line of result.results) console.log(`  [OK] ${line}`);
     if (result.manifestRewritten) {
-      console.log(`  [OK] Storage at ${result.storageDir} is back on the monolith layout (format 2); older versions can read it again.`);
+      console.log(
+        `  [OK] Storage at ${result.storageDir} is back on the monolith layout (format 2); older versions can read it again.`,
+      );
     } else {
-      console.warn(`  [WARN] Storage at ${result.storageDir} is on the monolith layout, but the manifest still reports the newer format — see the warning above.`);
+      console.warn(
+        `  [WARN] Storage at ${result.storageDir} is on the monolith layout, but the manifest still reports the newer format — see the warning above.`,
+      );
       process.exitCode = 1;
     }
     return;
   }
 
-  throw new Error("Usage: node scripts/protect-launcher-data.mjs <snapshot|restore-if-missing|check-target <ref>|unshard>");
+  throw new Error(
+    "Usage: node scripts/protect-launcher-data.mjs <snapshot|restore-if-missing|check-target <ref>|unshard>",
+  );
 }
 
 // pathToFileURL handles Windows drive letters; new URL(path, "file:") parses
