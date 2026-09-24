@@ -129,6 +129,11 @@ import { chatSummaryFingerprintMatches, fingerprintChatSummary } from "../servic
 import { newId } from "../utils/id-generator.js";
 import { characters, gameStateSnapshots, memoryChunks } from "../db/schema/index.js";
 import { and, desc, eq, inArray } from "../db/file-query.js";
+import {
+  applyDossierUpdate,
+  buildDossierBaseAnchors,
+  buildDossierRowsFromEditorRows,
+} from "../services/storage/persistent-item-dossier.apply.js";
 import { existsSync } from "fs";
 import { join } from "path";
 import { DATA_DIR } from "../utils/data-dir.js";
@@ -2793,6 +2798,110 @@ export async function chatsRoutes(app: FastifyInstance) {
     const gameStateStore = createGameStateStorage(app.db);
     await gameStateStore.deleteForChat(req.params.id);
     return reply.status(204).send();
+  });
+
+  // Save tracker edits to the item dossier. The panel and Agent Suite hold full
+  // rows (uuids included), which the shared playerStats path strips through
+  // normalization, so editor writes go through the dossier itself and the
+  // projection re-derives the tracker arrays afterwards.
+  app.post<{ Params: { id: string } }>("/:id/item-dossier", async (req, reply) => {
+    const chat = await storage.getById(req.params.id);
+    if (!chat) return reply.status(404).send({ error: "Chat not found" });
+    const body = req.body as Record<string, unknown>;
+    const messageId = typeof body.messageId === "string" && body.messageId ? body.messageId : "";
+    const swipeIndex =
+      typeof body.swipeIndex === "number" && Number.isInteger(body.swipeIndex) && body.swipeIndex >= 0
+        ? body.swipeIndex
+        : null;
+    if (!messageId || swipeIndex === null || !body.rows || typeof body.rows !== "object") {
+      return reply.status(400).send({ error: "messageId, swipeIndex and rows are required" });
+    }
+    const groups = body.rows as Record<string, unknown>;
+    for (const group of ["currencies", "equipped", "inventory"] as const) {
+      if (!Array.isArray(groups[group])) {
+        return reply.status(400).send({ error: `rows.${group} must be an array` });
+      }
+    }
+    // Duplicate uuids across the payload are a paste error, not a state: two
+    // rows citing one stack would also corrupt the partial-move statement count.
+    const seenUuids = new Set<string>();
+    for (const list of [groups.currencies, groups.equipped, groups.inventory]) {
+      for (const raw of list as unknown[]) {
+        const uuid =
+          raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>).uuid : null;
+        if (typeof uuid === "string" && uuid.trim()) {
+          if (seenUuids.has(uuid)) return reply.status(400).send({ error: `Duplicate uuid in rows: ${uuid}` });
+          seenUuids.add(uuid);
+        }
+      }
+    }
+    const messages = await storage.listMessages(req.params.id);
+    if (!messages.some((message) => message.id === messageId)) {
+      return reply.status(404).send({ error: "Message not found in this chat" });
+    }
+    // Explicit anchor only, mirroring the game-state PATCH: a stale panel must
+    // not write to a swipe it is not displaying.
+    const { createGameStateStorage } = await import("../services/storage/game-state.storage.js");
+    const gameStateStore = createGameStateStorage(app.db);
+    let snap = await gameStateStore.getByChatAndMessage(req.params.id, messageId, swipeIndex);
+    if (!snap) {
+      // A tracker turn need not have written a snapshot row for this swipe (the
+      // world-state agent may be off, or this is a first edit on a fresh chat),
+      // and the panel should still be able to save. Clone the state the panel is
+      // displaying -- the newest committed snapshot -- into a row for this
+      // message+swipe, the same convention the generate route uses. An explicit
+      // null base means "no base": an empty row, which is the honest one for a
+      // chat with no committed state yet.
+      const committed = (await gameStateStore.getLatestCommitted(req.params.id)) ?? null;
+      await gameStateStore.updateByMessage(messageId, swipeIndex, req.params.id, {}, undefined, {
+        baseSnapshot: committed,
+      });
+      snap = await gameStateStore.getByChatAndMessage(req.params.id, messageId, swipeIndex);
+    }
+    if (!snap) return reply.status(500).send({ error: "Could not create a game state for this message + swipe" });
+    const snapshotRow = snap as Record<string, unknown>;
+    const dossierIdentity = await resolveChatUserIdentity(createCharactersStorage(app.db), {
+      personaId: chat.personaId,
+      personaCharacterId: chat.personaCharacterId,
+      mode: (chat.mode as string) ?? null,
+    });
+    try {
+      const projected = await applyDossierUpdate({
+        db: app.db,
+        chatId: req.params.id,
+        rows: buildDossierRowsFromEditorRows(
+          groups,
+          (body.removed ?? undefined) as Record<string, unknown> | undefined,
+        ),
+        context: {
+          personaId: dossierIdentity?.id ?? null,
+          personaName: dossierIdentity?.name ?? null,
+        },
+        fieldLocks: parseTrackerFieldLocks(snapshotRow.fieldLocks as string | null),
+        playerStats: (() => {
+          try {
+            return snapshotRow.playerStats ? JSON.parse(snapshotRow.playerStats as string) : null;
+          } catch {
+            return null;
+          }
+        })(),
+        // The target itself is INCLUDED, unlike the agent turn's rewind base:
+        // a save on a turn that already ran the agent bases on its own result,
+        // and a turn that never ran one falls through to the true ancestor.
+        baseAnchors: [...buildDossierBaseAnchors(messages, messageId), { messageId, swipeIndex }],
+        snapshotAnchor: { messageId, swipeIndex },
+      });
+      // Persist unconditionally rather than gating on `changed`: an edit to a
+      // dossier-only field (isStolen, isGifted) changes no projected array.
+      await app.db
+        .update(gameStateSnapshots)
+        .set({ playerStats: JSON.stringify(projected.playerStats) })
+        .where(and(eq(gameStateSnapshots.chatId, req.params.id), eq(gameStateSnapshots.id, snapshotRow.id as string)));
+      return { playerStats: projected.playerStats };
+    } catch (err) {
+      logger.error(err, "[item-dossier] Failed to save tracker edits");
+      return reply.status(500).send({ error: "Failed to save tracker edits" });
+    }
   });
 
   // Peek prompt — return an exact saved turn prompt when available, otherwise
