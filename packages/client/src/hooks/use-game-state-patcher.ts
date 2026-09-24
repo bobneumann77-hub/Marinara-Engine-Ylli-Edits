@@ -489,6 +489,29 @@ export function useGameStatePatcher(chatId: string | null, registrationId?: stri
     [chatId],
   );
 
+  /**
+   * Store-only sibling of {@link patchPlayerStatsMany}, for edits that a package-owned
+   * endpoint persists instead of the game-state PATCH.
+   *
+   * The Inventory Tracker panel saves through the item dossier, and the PATCH raced it
+   * over the same `playerStats` field while normalizing rows on the way, repainting
+   * stripped rows over the uuid/class/rarity/flair the dossier had just stored. Skipping
+   * the queue leaves the dossier as the field's only writer; `isRefreshing` still wins.
+   */
+  const patchPlayerStatsManyLocal = useCallback(
+    (patch: Partial<PlayerStats> | ((current: PlayerStats) => Partial<PlayerStats>)) => {
+      if (!chatId) return;
+      const store = useGameStateStore.getState();
+      if (store.isRefreshing) return;
+      const prev = getCurrentGameStateForChat(chatId);
+      const current = prev?.playerStats ?? createEmptyPlayerStats();
+      const resolved = typeof patch === "function" ? patch(current) : patch;
+      if (Object.keys(resolved).length === 0) return;
+      store.setGameState({ ...(prev ?? createEmptyGameState(chatId)), playerStats: { ...current, ...resolved } });
+    },
+    [chatId],
+  );
+
   const flushPatch = useCallback(async () => {
     if (!chatId) return;
     await flushGameStatePatch(chatId);
@@ -507,5 +530,5 @@ export function useGameStatePatcher(chatId: string | null, registrationId?: stri
     };
   }, [flushPatch, registerFlushPatch, registrationId]);
 
-  return { patchField, patchPlayerStats, patchPlayerStatsMany, flushPatch };
+  return { patchField, patchPlayerStats, patchPlayerStatsMany, patchPlayerStatsManyLocal, flushPatch };
 }
