@@ -202,6 +202,8 @@ import { createCustomStickersStorage } from "../services/storage/custom-stickers
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
+import { applyDossierUpdate, buildDossierBaseAnchors } from "../services/storage/persistent-item-dossier.apply.js";
+import { buildDossierRowsFromInventoryTracker } from "../services/storage/persistent-item-dossier.reconciler.js";
 import { getCustomAgentImportPolicy } from "../services/agents/custom-agent-import-policy.service.js";
 import { buildLorebookSemanticEmbeddingsById, warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
@@ -11677,11 +11679,50 @@ export async function generateRoutes(app: FastifyInstance) {
                   snapshot: snap,
                   lockState,
                 });
-                if (snap && inventoryTrackerPatch.changed) {
+                const dossierRows = buildDossierRowsFromInventoryTracker({
+                  rawData: result.data as Record<string, unknown>,
+                  mergedPlayerStats: inventoryTrackerPatch.playerStats,
+                });
+                // Rewind base: every message before this turn, at its active
+                // swipe. The walk's semantics live with `buildDossierBaseAnchors`.
+                const dossierBaseAnchors = buildDossierBaseAnchors(allChatMessages, messageId);
+                // Identity for this write: `resolvedUserIdentity` is assigned only
+                // inside `if (userMsg?.id)`, and a swipe or regeneration reuses the
+                // user message, so it stays null and every stack would mint to the
+                // literal "player". Resolve locally instead of hoisting that
+                // assignment -- other readers depend on today's null there. `??`
+                // short-circuits, so a normal turn pays nothing.
+                const dossierIdentity =
+                  resolvedUserIdentity ??
+                  (await resolveChatUserIdentity(chars, {
+                    personaId: chat.personaId,
+                    personaCharacterId: chat.personaCharacterId,
+                    mode: requestChatMode,
+                  }).catch(releaseActiveGenerationAndRethrow));
+                const projectedPlayerStats = await applyDossierUpdate({
+                  db: app.db,
+                  chatId: input.chatId,
+                  rows: dossierRows,
+                  context: {
+                    presentCharacters: snap
+                      ? parseGameStateRow(snap as Record<string, unknown>).presentCharacters
+                      : null,
+                    // Persona identity travels with the rows, so a stack survives a
+                    // persona change: keyed on the stable id, falling back to the name.
+                    personaId: dossierIdentity?.id ?? null,
+                    personaName: dossierIdentity?.name ?? null,
+                  },
+                  // A pinned tracker array keeps whatever the user left there.
+                  fieldLocks: (lockState?.fieldLocks as Record<string, boolean> | null) ?? null,
+                  playerStats: inventoryTrackerPatch.playerStats,
+                  baseAnchors: dossierBaseAnchors,
+                  snapshotAnchor: { messageId, swipeIndex: targetSwipeIndex },
+                });
+                if (snap && (inventoryTrackerPatch.changed || projectedPlayerStats.changed)) {
                   await app.db
                     .update(gameStateSnapshotsTable)
                     .set({
-                      playerStats: JSON.stringify(inventoryTrackerPatch.playerStats),
+                      playerStats: JSON.stringify(projectedPlayerStats.playerStats),
                       fieldLocks: serializeMigratedTrackerLocks(lockState),
                     })
                     .where(
@@ -11691,7 +11732,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 if (inventoryTrackerPatch.changed) {
                   const acquisitions = findInventoryTrackerAcquisitions(
                     previousPlayerStats,
-                    inventoryTrackerPatch.playerStats,
+                    projectedPlayerStats.playerStats,
                   );
                   if (acquisitions.length > 0) {
                     await updateJournal(app.db, input.chatId, (journal) =>

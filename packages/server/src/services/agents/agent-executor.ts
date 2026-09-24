@@ -336,18 +336,71 @@ function shouldIncludeQuestContext(agentTypes: string[]): boolean {
   return agentTypes.includes("quest");
 }
 
+/** Inventory tracker row arrays whose projected rows carry a nested `definition`. */
+const INVENTORY_TRACKER_ROW_KEYS = [
+  "inventoryTrackerCurrencies",
+  "inventoryTrackerEquipped",
+  "inventoryTrackerInventory",
+] as const;
+
+/**
+ * Strip the nested `definition` object from inventory tracker rows before an agent
+ * sees them. It exists for the PANEL -- an emptied name or description field shows
+ * its item type's own value -- and repeating a type's data on every row of every
+ * agent's context is pure bloat: a thirty-item inventory would carry the same
+ * handful of types thirty times. The panel reads the projected rows from game
+ * state directly, so it keeps them.
+ *
+ * Two type-level facts are lifted onto the row first, because an agent cannot respect
+ * a flag it cannot see: `isNamedArtifact` (this type exists once in the world, so never
+ * mint another) and `isCurrency` (money has no business being worn). Each is stated
+ * only when true, so a plain row gains nothing.
+ */
+function omitInventoryTrackerDefinitions(playerStats: unknown): unknown {
+  if (!isRecord(playerStats)) return playerStats;
+  let changed = false;
+  const next: Record<string, unknown> = { ...playerStats };
+  for (const key of INVENTORY_TRACKER_ROW_KEYS) {
+    const rows = next[key];
+    if (!Array.isArray(rows) || rows.length === 0) continue;
+    let rowsChanged = false;
+    const stripped = rows.map((row) => {
+      if (!isRecord(row) || row.definition === undefined) return row;
+      const withoutDefinition: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(row)) {
+        if (field !== "definition") withoutDefinition[field] = value;
+      }
+      const type = row.definition;
+      if (isRecord(type)) {
+        if (type.isNamedArtifact === true) withoutDefinition.isNamedArtifact = true;
+        if (type.isCurrency === true) withoutDefinition.isCurrency = true;
+      }
+      rowsChanged = true;
+      return withoutDefinition;
+    });
+    if (rowsChanged) {
+      next[key] = stripped;
+      changed = true;
+    }
+  }
+  return changed ? next : playerStats;
+}
+
 function compactQuestPlayerStatsForContext(playerStats: unknown, agentTypes: string[]): unknown {
-  if (!isRecord(playerStats) || playerStats.activeQuests === undefined) {
-    return playerStats;
+  // Definitions come off FIRST: the early return below would otherwise leak them
+  // into a state with no quests at all, which is the common case.
+  const compacted = omitInventoryTrackerDefinitions(playerStats);
+  if (!isRecord(compacted) || compacted.activeQuests === undefined) {
+    return compacted;
   }
 
   if (!shouldIncludeQuestContext(agentTypes)) {
-    return Object.fromEntries(Object.entries(playerStats).filter(([key]) => key !== "activeQuests"));
+    return Object.fromEntries(Object.entries(compacted).filter(([key]) => key !== "activeQuests"));
   }
 
   return {
-    ...playerStats,
-    activeQuests: compactQuestProgressForContext(playerStats.activeQuests),
+    ...compacted,
+    activeQuests: compactQuestProgressForContext(compacted.activeQuests),
   };
 }
 
