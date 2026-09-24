@@ -276,6 +276,8 @@ import {
   readSpotifyTrackUris,
   type SpotifyRuntimeAgent,
 } from "../../services/generation/spotify-agent-runtime.js";
+import { buildDossierRowsFromInventoryTracker } from "../../services/storage/persistent-item-dossier.reconciler.js";
+import { applyDossierUpdate, buildDossierBaseAnchors } from "../../services/storage/persistent-item-dossier.apply.js";
 
 type PersonaContext = {
   // Persona-store ID only. A character-backed user identity keeps this null so
@@ -3384,11 +3386,43 @@ async function applyRetryResultEffects(args: {
           snapshot: snap,
           lockState: snap ? parseGameStateRow(snap as Record<string, unknown>) : null,
         });
-        if (snap && inventoryTrackerPatch.changed) {
+        const dossierRows = buildDossierRowsFromInventoryTracker({
+          rawData: result.data as Record<string, unknown>,
+          mergedPlayerStats: inventoryTrackerPatch.playerStats,
+        });
+        const retryPersonaOwnerId = (() => {
+          const identity = args.agentContext.memory._userIdentityId;
+          if (typeof identity === "string" && identity) return identity;
+          const persona = args.agentContext.memory._personaId;
+          return typeof persona === "string" && persona ? persona : null;
+        })();
+        // Reconcile, then project the dossier back into playerStats: the agent emits
+        // DELTAS while the patch builder replaces whole groups, so the model would
+        // otherwise see one changed potion as its entire inventory.
+        const retryLockState = snap ? parseGameStateRow(snap as Record<string, unknown>) : null;
+        const retryAllMessages = await chats.listMessages(chatId);
+        assertRetryActive();
+        // Rewind base: every message before the retry target, at its active swipe.
+        const retryBaseAnchors = buildDossierBaseAnchors(retryAllMessages, retryMessageId);
+        const dossierProjection = await applyDossierUpdate({
+          db: args.app.db,
+          chatId,
+          rows: dossierRows,
+          context: {
+            presentCharacters: retryLockState?.presentCharacters ?? null,
+            personaId: retryPersonaOwnerId,
+            personaName: args.agentContext.persona?.name ?? null,
+          },
+          fieldLocks: (retryLockState?.fieldLocks as Record<string, boolean> | null) ?? null,
+          playerStats: inventoryTrackerPatch.playerStats,
+          baseAnchors: retryBaseAnchors,
+          snapshotAnchor: { messageId: retryMessageId, swipeIndex: retrySwipeIndex },
+        });
+        if (snap && (inventoryTrackerPatch.changed || dossierProjection.changed)) {
           assertRetryActive();
           await app.db
             .update(gameStateSnapshotsTable)
-            .set({ playerStats: JSON.stringify(inventoryTrackerPatch.playerStats) })
+            .set({ playerStats: JSON.stringify(dossierProjection.playerStats) })
             .where(and(eq(gameStateSnapshotsTable.chatId, chatId), eq(gameStateSnapshotsTable.id, snap.id)));
           assertRetryActive();
         }
