@@ -117,7 +117,10 @@ export function RoleplayInventoryTrackerPanel({
         onUpdateEquipped={onUpdateEquipped}
         onUpdateInventory={onUpdateInventory}
         deleteMode
-        addMode
+        // Add-only: the popover may create rows, but it used to pass addMode, which also
+        // forced every empty detail field and a `× 1` onto every row. Empty fields reveal
+        // per row on click instead.
+        allowAdd
         plain
         header={
           <div className="flex items-center justify-between px-1 pb-1">
