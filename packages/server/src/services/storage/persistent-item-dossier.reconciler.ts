@@ -108,7 +108,12 @@ export interface ItemDossierReconcileContext {
   chatCharacters?: Array<{
     characterId?: string | null;
     name?: string | null;
-    /** Reserved: nobody fills this yet, so `resolveOwner`'s alias branch is inert. */
+    /**
+     * The card's own aliases, so a model that writes "Logan" one turn and
+     * "Wolverine" the next still resolves to one identity. Fed by
+     * `resolveChatCharacters`; ambiguous aliases across cards resolve to the
+     * first match.
+     */
     nameAliases?: string[] | null;
   }> | null;
   /** Current scene location observations, when a tracker/world-maps agent supplied them. */

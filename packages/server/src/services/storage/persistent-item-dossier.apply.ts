@@ -13,7 +13,7 @@
 import type { DB } from "../../db/connection.js";
 import { createCharactersStorage } from "./characters.storage.js";
 import { createChatsStorage } from "./chats.storage.js";
-import { resolveCharacterNameMap } from "./character-name-map.js";
+import { resolveCharacterIdentityMap } from "./character-name-map.js";
 import { reconcileAndProjectItemDossier } from "./persistent-item-dossier.projection.js";
 import { createPersistentItemDossierStorage } from "./persistent-item-dossier.storage.js";
 import { createItemDossierSnapshotStorage } from "./persistent-item-dossier-snapshot.storage.js";
@@ -53,14 +53,26 @@ function readCharacterIds(value: unknown): string[] {
   }
 }
 
-/** The chat's own cards as `{ characterId, name }`, skipping nameless rows. */
-async function resolveChatCharacters(db: DB, chatId: string): Promise<Array<{ characterId: string; name: string }>> {
+/**
+ * The chat's own cards as `{ characterId, name, nameAliases }`, skipping nameless
+ * rows. `nameAliases` is what feeds `resolveOwner`'s alias tier: a model writes
+ * "Logan" one turn and "Wolverine" the next, and only the card's own aliases map
+ * both spellings onto one identity.
+ */
+async function resolveChatCharacters(
+  db: DB,
+  chatId: string,
+): Promise<Array<{ characterId: string; name: string; nameAliases: string[] }>> {
   const chat = await createChatsStorage(db).getById(chatId);
   const characterIds = readCharacterIds(chat?.characterIds);
   if (characterIds.length === 0) return [];
   const characters = createCharactersStorage(db);
-  const nameById = await resolveCharacterNameMap(characterIds, (id) => characters.getById(id));
-  return [...nameById].map(([characterId, name]) => ({ characterId, name }));
+  const identityById = await resolveCharacterIdentityMap(characterIds, (id) => characters.getById(id));
+  return [...identityById].map(([characterId, identity]) => ({
+    characterId,
+    name: identity.name,
+    nameAliases: identity.nameAliases,
+  }));
 }
 
 /** Fill in the chat's own cards unless the caller supplied some: the stable half of owner resolution. */
